@@ -90,8 +90,10 @@ The battery doorbell only streams over WebRTC through Google's servers, and the 
 tile opens Google Home for web full screen in an embedded GeckoView (`DoorbellView`); Back returns to the grid.
 Android's WebView can't be used: Google refuses account sign-in from it.
 - A built-in web extension (`launcher/assets/doorbell/`) presses "Live video" (again after Google's five-minute battery
-  limit), dismisses notices, and plays the stream on a full-window video layer. Leaving loads `about:blank`, which
-  ends the stream.
+  limit), dismisses notices, and plays the stream on a full-window video layer.
+- The page is preloaded when the Cameras screen opens and then steered by URL fragment (`#live` opens the single
+  camera view and starts the stream, `#idle` closes it, which ends the stream), so OK only waits for the doorbell to
+  wake (~12 s). The page is unloaded when the Cameras streams are shut down.
 - GeckoView and its libraries: `./launcher/fetch-gecko.py` downloads them into `launcher/gecko/` (git-ignored, ~90 MB);
   `build.sh` unpacks the AARs, merges their manifests (`merge-manifest.py`) and resources, and bundles the native code.
   Play-services FIDO and media3 are left out, so WebAuthn is switched off in `DoorbellView`'s Gecko config (Google's
