@@ -159,12 +159,11 @@ class CameraLayer extends FrameLayout {
 
     private int dp(float v) { return Math.round(v * dp); }
 
-    /** Keep the remote's focus inside the Cameras screen; otherwise Down on the bottom row lands on the hidden dock. */
+    /** Move the remote's focus only among this screen's views: the dock underneath is still focusable, and on the
+     *  bottom row it is often nearer than the next tile. */
     @Override public View focusSearch(View focused, int direction) {
-        View next = super.focusSearch(focused, direction);
-        for (View v = next; v != null; v = v.getParent() instanceof View ? (View) v.getParent() : null)
-            if (v == this) return next;
-        return focused;
+        View next = android.view.FocusFinder.getInstance().findNextFocus(this, focused, direction);
+        return next != null ? next : focused;
     }
 
     private TextView overlayText(Context c, float sp) {
