@@ -1,6 +1,6 @@
 // Google Home for web, inside the TV's Cameras screen: open the doorbell's single-camera view, press "Live video"
 // (again whenever Google's five-minute battery limit stops the stream) and show the stream on a full-window video
-// layer above the page. Until it plays, a black "waking" curtain hides the page.
+// layer above the page. Until it plays, a black "waking" curtain hides the page; a start stuck for 45 s reloads once.
 (function () {
   // signed out: Google shows its welcome page; go to sign-in, then come back to the home
   if (location.pathname.startsWith("/welcome")) {
@@ -26,8 +26,9 @@
   function tick() {
     if (!document.body) return;
     if (!overlay.isConnected) document.body.append(curtain, overlay);
-    // nothing playing after a minute: show the page, in case Google is asking for something
-    curtain.style.display = Date.now() - started < 60000 ? "flex" : "none";
+    curtain.style.display = "flex";
+    const waited = Date.now() - started;
+    if (waited > 45000) curtain.textContent = "Still waking the doorbell…  press Back to cancel";
     const notice = [...document.querySelectorAll("[role=dialog],[role=alertdialog]")]
       .map(d => [...d.querySelectorAll("button")].find(b => /^(ok|got it|dismiss|close)$/i.test(textOf(b)))).find(Boolean);
     if (notice) { notice.click(); return; }
@@ -44,12 +45,17 @@
       playing.muted = true;                                          // sound comes from the overlay
       overlay.style.display = "block";
       curtain.style.display = "none";
+      sessionStorage.removeItem("tvReloaded");                       // a later stall may reload again
       return;
     }
     overlay.style.display = "none";
     overlay.srcObject = null;
     const live = button(/^(live video|watch live)$/i);
     if (live) live.click();
+    else if (waited > 45000 && !sessionStorage.getItem("tvReloaded")) {      // stuck: reload once
+      sessionStorage.setItem("tvReloaded", "1");
+      location.reload();
+    }
   }
 
   setInterval(tick, 1000);
