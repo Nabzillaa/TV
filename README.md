@@ -91,9 +91,12 @@ tile opens Google Home for web full screen in an embedded GeckoView (`DoorbellVi
 Android's WebView can't be used: Google refuses account sign-in from it.
 - A built-in web extension (`launcher/assets/doorbell/`) presses "Live video" (again after Google's five-minute battery
   limit), dismisses notices, and plays the stream on a full-window video layer.
-- The page is preloaded when the Cameras screen opens and then steered by URL fragment (`#live` opens the single
-  camera view and starts the stream, `#idle` closes it, which ends the stream), so OK only waits for the doorbell to
-  wake (~12 s). The page is unloaded when the Cameras streams are shut down.
+- The page is preloaded when the Cameras screen opens and then steered over the extension's native-messaging port
+  (`{live: true}` opens the single-camera view and starts the stream; `{live: false}` goes back with
+  `history.back()`, which ends the stream without reloading). The page's process runs at foreground priority so
+  Android doesn't kill it for the camera streams' memory. OK to video: ~10 s (about 6.5 s is the doorbell waking).
+  The page is unloaded when the Cameras streams are shut down or the launcher is left.
+- The extension logs each step: `adb logcat | grep TVDB`.
 - GeckoView and its libraries: `./launcher/fetch-gecko.py` downloads them into `launcher/gecko/` (git-ignored, ~90 MB);
   `build.sh` unpacks the AARs, merges their manifests (`merge-manifest.py`) and resources, and bundles the native code.
   Play-services FIDO and media3 are left out, so WebAuthn is switched off in `DoorbellView`'s Gecko config (Google's

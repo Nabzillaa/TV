@@ -9,6 +9,11 @@ D8=$SDK/build-tools/36.1.0/d8                 # newer d8 reads the libraries' Ja
 JAR=$SDK/platforms/android-34/android.jar
 [ -d gecko ] || { echo "Run ./fetch-gecko.py first (downloads GeckoView)."; exit 1; }
 rm -rf out && mkdir -p out/classes out/dex out/gen out/aar out/stage/lib/armeabi-v7a
+# the doorbell extension's script must parse (checked with macOS's JavaScript engine)
+for js in assets/doorbell/*.js; do
+  osascript -l JavaScript -e "ObjC.import('Foundation'); new Function(\$.NSString.stringWithContentsOfFileEncodingError('$js', 4, null).js)" >/dev/null \
+    || { echo "Syntax error in $js"; exit 1; }
+done
 
 # libraries: unpack the AARs, compile their resources, collect jars, manifests and native code
 LIBS=(); RES=(); PKGS=(); MANIFESTS=()
