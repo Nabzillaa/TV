@@ -10,10 +10,16 @@ import org.mozilla.geckoview.GeckoSession;
 import org.mozilla.geckoview.GeckoSessionSettings;
 import org.mozilla.geckoview.GeckoView;
 
+import java.util.List;
+
 /**
  * The Google doorbell inside the Cameras screen: Google Home for web rendered by GeckoView (Google refuses
  * account sign-in from Android's WebView, and the battery doorbell only streams through Google). The built-in
- * extension in assets/doorbell presses "Live video" and shows the video full window.
+ * extension in assets/doorbell does the clicking and shows the video full window.
+ *
+ * The page is loaded once (when the Cameras screen opens) and then only steered with the URL fragment:
+ * #live starts the stream, #idle closes it and waits on the camera list. Fragment changes don't reload the
+ * page, so opening the doorbell only costs the camera's wake-up.
  */
 final class DoorbellView {
     private static final String TAG = "DoorbellView";
@@ -22,6 +28,8 @@ final class DoorbellView {
     final GeckoView view;
     private final GeckoSession session;
     private final String url;
+    private String location;                              // the page's current address, without fragment
+    private boolean showing;
 
     DoorbellView(Context c, String url) {
         this.url = url;
@@ -53,30 +61,55 @@ final class DoorbellView {
             @Override public void onKill(GeckoSession s) { recover(); }
             @Override public void onCrash(GeckoSession s) { recover(); }
         });
+        session.setNavigationDelegate(new GeckoSession.NavigationDelegate() {
+            @Override public void onLocationChange(GeckoSession s, String u, List<GeckoSession.PermissionDelegate.ContentPermission> p, Boolean gesture) {
+                if (u == null || !u.startsWith("https://home.google.com/")) { location = null; return; }
+                int hash = u.indexOf('#');
+                location = hash < 0 ? u : u.substring(0, hash);
+            }
+        });
         session.open(runtime);
         view = new GeckoView(c);
         view.setSession(session);
     }
 
-    private boolean showing;
+    private void steer(String mode) {
+        session.loadUri((location != null ? location : url) + "#" + mode);
+    }
 
     private void recover() {
         Log.w(TAG, "page process ended, reopening");
+        location = null;
         if (session.isOpen()) session.close();
         session.open(runtime);
-        if (showing) session.loadUri(url);
+        steer(showing ? "live" : "idle");
+    }
+
+    /** Load the page in the background (Cameras screen opened) so the doorbell itself opens quickly. */
+    void warm() {
+        if (showing || location != null) return;
+        session.setActive(true);                          // inactive pages are throttled to a crawl
+        steer("idle");
     }
 
     void show() {
         showing = true;
         session.setActive(true);
-        session.loadUri(url);
+        steer("live");
     }
 
-    /** Leaving the page ends the stream, so the battery doorbell isn't kept awake. */
+    /** Cameras screen shut down: drop the page to give its memory back. */
+    void unload() {
+        showing = false;
+        location = null;
+        session.loadUri("about:blank");
+        session.setActive(false);
+    }
+
+    /** Back to the camera list on the page, which ends the stream so the battery doorbell isn't kept awake. */
     void hide() {
         showing = false;
-        session.loadUri("about:blank");
+        steer("idle");
         session.setActive(false);
     }
 }

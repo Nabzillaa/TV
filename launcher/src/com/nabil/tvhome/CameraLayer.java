@@ -316,8 +316,7 @@ class CameraLayer extends FrameLayout {
         stopEufy();
         for (int i = 1; i <= MAX; i++) detachTile(i);
         synchronized (snapChannels) { snapChannels.clear(); }
-        if (doorbell == null) doorbell = new DoorbellView(getContext(), dbUrl);
-        if (doorbell.view.getParent() == null) fullBox.addView(doorbell.view, 2, new LayoutParams(-1, -1));
+        ensureDoorbell();
         doorbell.view.setVisibility(VISIBLE);
         fullVideo.setVisibility(GONE);                                 // no camera stream behind the page
         gridBox.setVisibility(GONE);
@@ -335,6 +334,20 @@ class CameraLayer extends FrameLayout {
         if (!isOpen()) open();
         openDoorbell();
     }
+
+    private void ensureDoorbell() {
+        if (doorbell != null) return;
+        doorbell = new DoorbellView(getContext(), dbUrl);
+        doorbell.view.setVisibility(GONE);
+        fullBox.addView(doorbell.view, 2, new LayoutParams(-1, -1));
+    }
+
+    /** Load Google Home in the background once the Cameras screen is up, so the doorbell tile opens quickly. */
+    private final Runnable warmDoorbell = () -> {
+        if (dbUrl == null || !isOpen()) return;
+        ensureDoorbell();
+        doorbell.warm();
+    };
 
     private void hideDoorbell() {
         if (doorbell == null || doorbell.view.getVisibility() != VISIBLE) return;
@@ -396,6 +409,8 @@ class CameraLayer extends FrameLayout {
         setAlpha(0f);
         setVisibility(VISIBLE);
         animate().alpha(1f).setDuration(180).start();
+        ui.removeCallbacks(warmDoorbell);
+        ui.postDelayed(warmDoorbell, 1500);
         if (tileFrame[1] != null) tileFrame[1].requestFocus();
         for (int ch = 1; ch <= tiles; ch++) startTile(ch);
     }
@@ -477,6 +492,7 @@ class CameraLayer extends FrameLayout {
         for (int ch = 1; ch <= MAX; ch++) stopTile(ch);
         stopBaseus();
         stopEufy();
+        if (doorbell != null) { hideDoorbell(); doorbell.unload(); }
     }
 
     // ------------------------------------------------------------ grid streams
