@@ -84,6 +84,24 @@ livestream, RSA/AES video-frame container), `AnnexBDecoder` (H.264 and H.265).
 - The cloud had no command cipher for this HomeBase, so commands use the level-1 key (serial + device ID), as the
   community library does in that case.
 
+## Google Nest Doorbell (battery): last Cameras tile, Google Home for web inside the launcher
+The battery doorbell only streams over WebRTC through Google's servers, and the free routes on this TV don't work
+(Device Access costs US$5; the Assistant's camera viewer, `com.google.android.tv.bali`, isn't on this TV). So OK on the
+tile opens Google Home for web full screen in an embedded GeckoView (`DoorbellView`); Back returns to the grid.
+Android's WebView can't be used: Google refuses account sign-in from it.
+- A built-in web extension (`launcher/assets/doorbell/`) presses "Live video" (again after Google's five-minute battery
+  limit), dismisses notices, and plays the stream on a full-window video layer. Leaving loads `about:blank`, which
+  ends the stream.
+- GeckoView and its libraries: `./launcher/fetch-gecko.py` downloads them into `launcher/gecko/` (git-ignored, ~90 MB);
+  `build.sh` unpacks the AARs, merges their manifests (`merge-manifest.py`) and resources, and bundles the native code.
+  Play-services FIDO and media3 are left out, so WebAuthn is switched off in `DoorbellView`'s Gecko config (Google's
+  sign-in page probes it and Gecko crashes without FIDO). One content process, no Fission: the TV has 1.8 GB.
+- While the doorbell is open the NVR, Baseus and Eufy streams stop to free memory; they restart on Back.
+- One-time setup: sign in to Google inside the doorbell view (it redirects to sign-in when signed out).
+- Configure: `adb shell am start -n com.nabil.tvhome/.HomeActivity --es doorbell "'Front door doorbell|https://home.google.com/u/0/home/<home-id>/cameras/grid'"`
+  (`--es doorbell clear` removes the tile). Open directly: `--es show doorbell` (or `--es show cameras`).
+- Don't re-enable `com.google.android.apps.tv.launcherx`: it outranks the custom home screen.
+
 ## Known loose ends
 - YouTube (`com.google.android.youtube.tv`) was disabled by something other than this project; re-enable with
   `adb shell pm enable com.google.android.youtube.tv` if you want it back.

@@ -54,6 +54,8 @@ class CameraLayer extends FrameLayout {
     private AnnexBDecoder[] euSnap = new AnnexBDecoder[0];  // thumbnails, software: grid tiles
     private final boolean[] euUnavailable = new boolean[16];
     private BaseusStream baseus;
+    private String dbName, dbUrl;            // Google doorbell: last tile, Google Home for web in GeckoView
+    private DoorbellView doorbell;
     private final AnnexBDecoder[] lensDec = new AnnexBDecoder[2];    // live, hardware: full screen only
     private final AnnexBDecoder[] lensSnap = new AnnexBDecoder[2];   // keyframe thumbnails, software: grid tiles
     private volatile String baseusState = "Connecting…";
@@ -125,7 +127,7 @@ class CameraLayer extends FrameLayout {
         fullVideo.setSurfaceTextureListener(new SurfaceTextureAdapter() {
             @Override public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int h) {
                 fullSurface = new Surface(st);
-                if (fullMode && !fullSnap && fullPreview == null) showPreviewThenMain();
+                if (fullMode && !fullSnap && fullPreview == null && !isDb(current)) showPreviewThenMain();
             }
             @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture st) {
                 stopFullClient();
@@ -139,8 +141,8 @@ class CameraLayer extends FrameLayout {
         fullVideo.setFocusable(true);
         fullVideo.setOnKeyListener((v, code, e) -> {
             if (e.getAction() != KeyEvent.ACTION_DOWN) return false;
-            if (code == KeyEvent.KEYCODE_DPAD_RIGHT) { switchTo(current % Math.max(1, tiles) + 1); return true; }
-            if (code == KeyEvent.KEYCODE_DPAD_LEFT) { switchTo(current == 1 ? Math.max(1, tiles) : current - 1); return true; }
+            if (code == KeyEvent.KEYCODE_DPAD_RIGHT) { switchTo(current % streamTiles() + 1); return true; }
+            if (code == KeyEvent.KEYCODE_DPAD_LEFT) { switchTo(current == 1 ? streamTiles() : current - 1); return true; }
             return false;
         });
         fullBox.addView(fullVideo, new LayoutParams(-1, -1));
@@ -156,6 +158,14 @@ class CameraLayer extends FrameLayout {
     }
 
     private int dp(float v) { return Math.round(v * dp); }
+
+    /** Keep the remote's focus inside the Cameras screen; otherwise Down on the bottom row lands on the hidden dock. */
+    @Override public View focusSearch(View focused, int direction) {
+        View next = super.focusSearch(focused, direction);
+        for (View v = next; v != null; v = v.getParent() instanceof View ? (View) v.getParent() : null)
+            if (v == this) return next;
+        return focused;
+    }
 
     private TextView overlayText(Context c, float sp) {
         TextView t = new TextView(c);
@@ -218,7 +228,9 @@ class CameraLayer extends FrameLayout {
         for (String b : prefs.getString("eu_bad", "").split(",")) {
             try { int c = Integer.parseInt(b.trim()); for (int i = 0; i < euN; i++) if (euCh[i] == c) euUnavailable[channels + (baseusOn ? 2 : 0) + 1 + i] = true; } catch (NumberFormatException ignored) { }
         }
-        tiles = channels + (baseusOn ? 2 : 0) + euN;
+        dbUrl = prefs.getString("db_url", null);
+        dbName = prefs.getString("db_name", "Doorbell");
+        tiles = channels + (baseusOn ? 2 : 0) + euN + (dbUrl != null ? 1 : 0);
         int cols = tiles <= 1 ? 1 : tiles <= 4 ? 2 : tiles <= 9 ? 3 : 4, rows = (tiles + cols - 1) / cols, ch = 1;
         for (int r = 0; r < rows; r++) {
             LinearLayout row = new LinearLayout(getContext());
@@ -238,12 +250,15 @@ class CameraLayer extends FrameLayout {
     private int lensOf(int ch) { return ch - channels - 1; }
     private boolean isEu(int ch) { int base = channels + (baseusOn ? 2 : 0); return eufyOn && ch > base && ch <= base + euN; }
     private int euIdx(int ch) { return ch - channels - (baseusOn ? 2 : 0) - 1; }
+    private boolean isDb(int ch) { return dbUrl != null && ch == tiles; }
+    private int streamTiles() { return Math.max(1, dbUrl != null ? tiles - 1 : tiles); }   // tiles that play here
     private boolean isLive(int ch) { return isBs(ch) || isEu(ch); }          // tiles that run on a non-NVR stream
     private AnnexBDecoder liveDecoder(int ch) { return isBs(ch) ? lensDec[lensOf(ch)] : isEu(ch) ? euDec[euIdx(ch)] : null; }
     private AnnexBDecoder snapDecoder(int ch) { return isBs(ch) ? lensSnap[lensOf(ch)] : isEu(ch) ? euSnap[euIdx(ch)] : null; }
     private String tileName(int ch) {
         if (isBs(ch)) return "Baseus · " + (lensOf(ch) == 0 ? "Left" : "Right");
         if (isEu(ch)) return "Eufy · " + euName[euIdx(ch)] + " (" + euCh[euIdx(ch)] + ")";
+        if (isDb(ch)) return "Google · " + dbName;
         return "Channel " + ch;
     }
 
@@ -255,7 +270,7 @@ class CameraLayer extends FrameLayout {
         GradientDrawable idle = border(0x22FFFFFF), focus = border(0xFF64D2FF);
         f.setBackground(idle);
         f.setOnFocusChangeListener((v, has) -> f.setBackground(has ? focus : idle));
-        f.setOnClickListener(v -> enterFull(ch));
+        f.setOnClickListener(v -> { if (isDb(ch)) openDoorbell(); else enterFull(ch); });
         ImageView iv = new ImageView(c);
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         iv.setBackgroundColor(0xFF111114);
@@ -283,13 +298,79 @@ class CameraLayer extends FrameLayout {
         lp.setMargins(dp(12), 0, 0, dp(8));
         f.addView(label, lp);
         TextView st = overlayText(c, 13);
-        st.setText("Connecting…");
+        st.setText(isDb(ch) ? "" : "Connecting…");
+        if (isDb(ch)) iv.setImageBitmap(doorbellGlyph());
         f.addView(st, new LayoutParams(-2, -2, Gravity.CENTER));
         tileImage[ch] = iv;
         tileVideo[ch] = tv;
         tileStatus[ch] = st;
         tileFrame[ch] = f;
         return f;
+    }
+
+    /** The doorbell only streams through Google (WebRTC, no local API): full screen shows Google Home for web in GeckoView. */
+    private void openDoorbell() {
+        current = tiles;
+        fullMode = true;
+        for (int i = 1; i <= channels; i++) stopTile(i);              // free Wi-Fi, CPU and memory for the browser engine
+        stopBaseus();
+        stopEufy();
+        for (int i = 1; i <= MAX; i++) detachTile(i);
+        synchronized (snapChannels) { snapChannels.clear(); }
+        if (doorbell == null) doorbell = new DoorbellView(getContext(), dbUrl);
+        if (doorbell.view.getParent() == null) fullBox.addView(doorbell.view, 2, new LayoutParams(-1, -1));
+        doorbell.view.setVisibility(VISIBLE);
+        fullVideo.setVisibility(GONE);                                 // no camera stream behind the page
+        gridBox.setVisibility(GONE);
+        fullBox.setVisibility(VISIBLE);
+        fullImage.setImageDrawable(null);
+        fullLabel.setText(tileName(current));
+        fullStatus.setText("Google Home   ·   Back: grid");
+        doorbell.view.requestFocus();
+        doorbell.show();
+    }
+
+    /** Open the Cameras screen straight on the doorbell (adb: --es show doorbell). */
+    void showDoorbell() {
+        if (dbUrl == null) return;
+        if (!isOpen()) open();
+        openDoorbell();
+    }
+
+    private void hideDoorbell() {
+        if (doorbell == null || doorbell.view.getVisibility() != VISIBLE) return;
+        doorbell.hide();
+        doorbell.view.setVisibility(GONE);
+        fullVideo.setVisibility(VISIBLE);
+    }
+
+    /** Doorbell card for the grid: dark gradient with a white doorbell and a blue ring button. */
+    private Bitmap doorbellGlyph() {
+        int w = dp(320), h = dp(180);
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        p.setShader(new android.graphics.LinearGradient(0, 0, 0, h, 0xFF1E2A3A, 0xFF0B0F16, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, w, h, p);
+        p.setShader(null);
+        float cx = w * 0.27f, cy = h * 0.44f, bw = h * 0.20f, bh = h * 0.46f;
+        p.setColor(0xFFF2F2F7);
+        c.drawRoundRect(new android.graphics.RectF(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2), bw / 2, bw / 2, p);
+        p.setColor(0xFF1C1C1E);
+        c.drawCircle(cx, cy - bh * 0.24f, bw * 0.17f, p);              // camera lens
+        p.setColor(0xFF64D2FF);
+        c.drawCircle(cx, cy + bh * 0.18f, bw * 0.30f, p);              // lit ring button
+        p.setColor(0xFFF2F2F7);
+        c.drawCircle(cx, cy + bh * 0.18f, bw * 0.20f, p);
+        p.setColor(Color.WHITE);
+        p.setTextSize(h * 0.11f);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        c.drawText("Watch live", w * 0.44f, cy - h * 0.02f, p);
+        p.setColor(0xB3FFFFFF);
+        p.setTextSize(h * 0.075f);
+        p.setTypeface(Typeface.DEFAULT);
+        c.drawText("Press OK", w * 0.44f, cy + h * 0.10f, p);
+        return bmp;
     }
 
     private GradientDrawable border(int color) {
@@ -336,6 +417,7 @@ class CameraLayer extends FrameLayout {
         synchronized (snapChannels) { snapChannels.clear(); }
         fullSnap = false;
         stopFullClient();
+        hideDoorbell();
         for (int ch = 1; ch <= MAX; ch++) detachTile(ch);
         setVisibility(GONE);
         armWarmTimer();
@@ -346,6 +428,7 @@ class CameraLayer extends FrameLayout {
     /** Leaving the launcher: drop every stream. */
     void shutdown() {
         ui.removeCallbacks(warmStop);
+        hideDoorbell();
         stopAll();
         setVisibility(GONE);
     }
@@ -670,6 +753,7 @@ class CameraLayer extends FrameLayout {
     };
 
     private void leaveFull() {
+        hideDoorbell();
         fullMode = false;
         ui.removeCallbacks(upgradeCheck);
         fullPreview = null;

@@ -223,6 +223,19 @@ public class HomeActivity extends Activity {
         boolean eufyHideChange = i != null && i.hasExtra("eufy_hide");
         EufySetup.handle(this, prefs, i);
         if (eufyHideChange) { cameras.reload(); rebuildDock(); }
+        String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell
+        if (show != null) {
+            i.removeExtra("show");
+            ui.post(() -> { if (show.equals("doorbell")) cameras.showDoorbell(); else cameras.open(); });
+        }
+        String db = i == null ? null : i.getStringExtra("doorbell");     // --es doorbell "Name|https://home.google.com/..." (or clear)
+        if (db != null) {
+            i.removeExtra("doorbell");
+            String[] d = db.split("\\|", 2);
+            if (db.equals("clear")) prefs.edit().remove("db_name").remove("db_url").apply();
+            else if (d.length == 2 && d[1].startsWith("https://")) prefs.edit().putString("db_name", d[0]).putString("db_url", d[1]).apply();
+            cameras.reload();
+        }
         String v = i == null ? null : i.getStringExtra("nvr");
         if (v == null || v.isEmpty()) return;
         i.removeExtra("nvr");
@@ -853,20 +866,47 @@ public class HomeActivity extends Activity {
         wallRoot.animate().translationX(-(focusIdx - mid) * dp(5)).setDuration(450).start();
     }
 
+    /** Blue gradient tile with a glossy top, a white video camera with a lens and a red REC dot. Drawn at 2x so it stays sharp when magnified. */
     private Bitmap cameraGlyph() {
-        int s = dp(64);
+        int s = dp(64) * 2;
         Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(bmp);
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        p.setColor(0xFF1C3A4A);
+        p.setShader(new android.graphics.LinearGradient(0, 0, 0, s, 0xFF5AC8FA, 0xFF0A4FC8, android.graphics.Shader.TileMode.CLAMP));
         c.drawRect(0, 0, s, s, p);
-        p.setColor(0xFFF2F2F7);
-        c.drawRoundRect(new RectF(s * 0.14f, s * 0.30f, s * 0.70f, s * 0.70f), s * 0.07f, s * 0.07f, p);
-        android.graphics.Path tri = new android.graphics.Path();
-        tri.moveTo(s * 0.74f, s * 0.46f); tri.lineTo(s * 0.88f, s * 0.34f); tri.lineTo(s * 0.88f, s * 0.66f); tri.lineTo(s * 0.74f, s * 0.54f); tri.close();
-        c.drawPath(tri, p);
-        p.setColor(0xFFFF453A);
-        c.drawCircle(s * 0.24f, s * 0.40f, s * 0.035f, p);
+        p.setShader(new android.graphics.RadialGradient(s * 0.5f, -s * 0.15f, s * 0.75f, 0x38FFFFFF, 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(null);
+
+        // camera body + viewfinder, with a soft drop shadow
+        android.graphics.Path cam = new android.graphics.Path();
+        cam.addRoundRect(new RectF(s * 0.15f, s * 0.31f, s * 0.65f, s * 0.69f), s * 0.09f, s * 0.09f, android.graphics.Path.Direction.CW);
+        cam.addRect(s * 0.60f, s * 0.44f, s * 0.72f, s * 0.56f, android.graphics.Path.Direction.CW);
+        android.graphics.Path finder = new android.graphics.Path();
+        finder.moveTo(s * 0.69f, s * 0.45f); finder.lineTo(s * 0.85f, s * 0.35f); finder.lineTo(s * 0.85f, s * 0.65f); finder.lineTo(s * 0.69f, s * 0.55f); finder.close();
+        p.setColor(Color.WHITE);
+        p.setStyle(Paint.Style.FILL_AND_STROKE);
+        p.setStrokeJoin(Paint.Join.ROUND);
+        p.setStrokeWidth(s * 0.035f);
+        p.setShadowLayer(s * 0.035f, 0, s * 0.025f, 0x59001446);
+        c.drawPath(cam, p);
+        c.drawPath(finder, p);
+        p.clearShadowLayer();
+        p.setStyle(Paint.Style.FILL);
+
+        // lens
+        float cx = s * 0.40f, cy = s * 0.50f;
+        p.setColor(0xFF2D8BE0);
+        c.drawCircle(cx, cy, s * 0.13f, p);
+        p.setColor(0xFF0C286E);
+        c.drawCircle(cx, cy, s * 0.085f, p);
+        p.setColor(0xFF46A6EB);
+        c.drawCircle(cx, cy, s * 0.045f, p);
+        p.setColor(0xC8FFFFFF);
+        c.drawCircle(cx - s * 0.043f, cy - s * 0.052f, s * 0.018f, p);
+
+        p.setColor(0xFFFF3B30);
+        c.drawCircle(s * 0.215f, s * 0.39f, s * 0.028f, p);
         return bmp;
     }
 

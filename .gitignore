@@ -13,3 +13,5 @@ launcher/wall/
 *.keystore
 # Local scratch
 .DS_Store
+# Downloaded GeckoView + libraries (./launcher/fetch-gecko.py)
+launcher/gecko/

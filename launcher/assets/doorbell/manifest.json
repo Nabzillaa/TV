@@ -1,0 +1,10 @@
+{
+  "manifest_version": 2,
+  "name": "TV doorbell",
+  "version": "1.5",
+  "description": "Starts the doorbell's live video on Google Home for web and shows it full window.",
+  "browser_specific_settings": { "gecko": { "id": "doorbell@tvhome.nabil" } },
+  "content_scripts": [
+    { "matches": ["https://home.google.com/*"], "js": ["content.js"], "run_at": "document_idle", "all_frames": true }
+  ]
+}
