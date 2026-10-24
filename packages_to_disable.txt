@@ -1,0 +1,13 @@
+# package  # reason
+tv.anoki.acr.anokiacroptin # ACR: tracks what you watch (telemetry)
+com.homwee.store # ChiQ app store (promoted apps)
+com.homwee.help # ChiQ help app
+com.google.android.youtube.tvmusic # YouTube Music (not used)
+com.google.android.feedback # Google feedback reporting
+com.android.tv.feedbackconsent # feedback consent/telemetry
+com.google.android.apps.tv.dreamx # ambient screensaver (ads/recommendations)
+com.android.adservices.api # Android ad services API
+com.android.ondevicepersonalization.services # ad personalization
+com.android.federatedcompute.services # federated analytics
+com.google.android.apps.tv.launcherx # stock Google TV home (ads/recommendations); replaced by com.nabil.tvhome
+com.google.android.tungsten.setupwraith # setup wizard; its RecoveryActivity outranks the custom home

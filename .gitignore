@@ -1,0 +1,15 @@
+# Device backups, captures and experiments: contain personal data, logins, tokens, and camera images
+backup-*/
+.latest_backup
+baseus-test/
+eufy-parse.py
+*.pcap
+*.pcapng
+# Build output and signing key
+launcher/out/
+launcher/debug.keystore
+launcher/wall/
+*.apk
+*.keystore
+# Local scratch
+.DS_Store
