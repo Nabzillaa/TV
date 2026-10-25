@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Downloads GeckoView (armeabi-v7a) and its runtime dependencies into launcher/gecko/ for build.sh.
+"""Downloads the launcher's libraries into launcher/gecko/ for build.sh: GeckoView (armeabi-v7a, the doorbell's
+browser) and the Shizuku client (Clean up), with their runtime dependencies.
 
 No Gradle: walks the Maven POMs itself, keeps the newest version of each library, and skips what the
 doorbell page doesn't need (FIDO security keys via Play services, the media3 HLS player).
@@ -8,6 +9,7 @@ import os, re, sys, urllib.request
 import xml.etree.ElementTree as ET
 
 GECKO = ("org.mozilla.geckoview", "geckoview-armeabi-v7a", "158.0.20261021001945")
+SHIZUKU = [("dev.rikka.shizuku", "api", "13.1.5"), ("dev.rikka.shizuku", "provider", "13.1.5")]   # Clean up's adb-level rights
 REPOS = ["https://maven.mozilla.org/maven2/", "https://dl.google.com/dl/android/maven2/", "https://repo1.maven.org/maven2/"]
 SKIP = re.compile(r"^(com\.google\.android\.gms|androidx\.media3|org\.checkerframework|com\.google\.errorprone|org\.jspecify)")
 SKIP_ARTIFACTS = {"guava", "failureaccess"}      # androidx only needs Guava's ListenableFuture interface (listenablefuture)
@@ -55,7 +57,7 @@ def pom(g, a, v):
 
 
 def main():
-    chosen, queue = {}, [GECKO]
+    chosen, queue = {}, [GECKO] + SHIZUKU
     while queue:
         g, a, v = queue.pop()
         if SKIP.match(g) or a in SKIP_ARTIFACTS:

@@ -439,6 +439,13 @@ class CameraLayer extends FrameLayout {
         armEufyStop();
     }
 
+    /** Clean up: if the Cameras screen is closed, drop the warm streams and the doorbell page now, not in 3 minutes. */
+    void release() {
+        if (isOpen()) return;
+        ui.removeCallbacks(warmStop);
+        stopAll();
+    }
+
     /** Leaving the launcher: drop every stream. */
     void shutdown() {
         ui.removeCallbacks(warmStop);

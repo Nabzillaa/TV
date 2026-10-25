@@ -107,6 +107,17 @@ Android's WebView can't be used: Google refuses account sign-in from it.
   (`--es doorbell clear` removes the tile). Open directly: `--es show doorbell` (or `--es show cameras`).
 - Don't re-enable `com.google.android.apps.tv.launcherx`: it outranks the custom home screen.
 
+## Clean up (dock button)
+Frees memory and storage without losing anything. With **Shizuku** running it uses adb-level rights: `am kill-all`
+(stops only processes Android itself treats as safe to stop: idle and cached apps; Google services, Cast, the
+Assistant and the keyboard keep running) and `pm trim-caches` (empties every app's cache). App data and sign-ins are
+never touched; closed apps just cold-start next time. It also drops the launcher's warm camera streams and the doorbell
+page (the next doorbell open loads it fresh). The toast reports the memory and storage freed.
+- Shizuku (`moe.shizuku.privileged.api`, v13.6.0 from github.com/RikkaApps/Shizuku) is installed on the TV; the
+  launcher uses its client library (`dev.rikka.shizuku:api`/`provider`, fetched by `fetch-gecko.py`).
+- Shizuku stops when the TV restarts. Start it again from the Shizuku app (Wireless debugging), or from the Mac with
+  `./shizuku-start.sh`. Without it, Clean up only frees the launcher's own memory and cache, and says so.
+
 ## Known loose ends
 - YouTube (`com.google.android.youtube.tv`) was disabled by something other than this project; re-enable with
   `adb shell pm enable com.google.android.youtube.tv` if you want it back.

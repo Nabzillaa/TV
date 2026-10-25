@@ -581,7 +581,11 @@ public class HomeActivity extends Activity {
         startHud();
         startWeather();
         resetIdle();
-        if (allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE) focusDock(0);
+        if (allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE) {
+            if (returnToClean != null) returnToClean.requestFocus();         // back from the Shizuku prompt
+            else focusDock(0);
+        }
+        returnToClean = null;
     }
 
     @Override
@@ -799,6 +803,9 @@ public class HomeActivity extends Activity {
         if (cameras != null && cameras.configured())
             dock.addView(cameraDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), cameraGlyph()),
                     "Cameras", () -> cameras.open(), () -> ui.postDelayed(() -> { if (dock.findFocus() != null && cameras != null) cameras.prewarm(); }, 250)));
+        View clean = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), cleanGlyph()), "Clean up", null);
+        clean.setOnClickListener(v -> cleanUp(v));
+        dock.addView(clean);
         dock.addView(dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), gridGlyph()),
                 "All apps", () -> showAllApps(true)));
         AppEntry s = apps.get(SETTINGS_PKG);
@@ -908,6 +915,153 @@ public class HomeActivity extends Activity {
         p.setColor(0xFFFF3B30);
         c.drawCircle(s * 0.215f, s * 0.39f, s * 0.028f, p);
         return bmp;
+    }
+
+    // ------------------------------------------------------------------ clean up
+
+    private boolean cleaning;
+    private View returnToClean;                           // keep focus on Clean up across Shizuku's permission prompt
+
+    /**
+     * Free memory and storage without losing anything: with Shizuku running (adb-level rights), `am kill-all` stops the
+     * processes Android itself considers safe to stop (idle, cached) and `pm trim-caches` empties every app's cache;
+     * data and sign-ins are untouched, apps just cold-start next time. Without Shizuku, Android 14 only lets the launcher
+     * free its own memory and cache.
+     */
+    private void cleanUp(View item) {
+        if (cleaning) return;
+        int shizuku = shizukuState();
+        if (shizuku == SHIZUKU_ASK) {
+            returnToClean = item;
+            Toast.makeText(this, "Allow Home in the Shizuku prompt, then press Clean up again", Toast.LENGTH_LONG).show();
+            return;
+        }
+        cleaning = true;
+        ((ViewGroup) item).getChildAt(0).animate().rotationBy(360).setDuration(1200).start();   // spin the icon
+        final ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        final long memBefore = availableMemory(am);
+        final long diskBefore = getFilesDir().getUsableSpace();
+        cameras.release();
+        bg.execute(() -> {
+            if (shizuku == SHIZUKU_READY) {
+                shell("am kill-all");
+                shell("pm trim-caches 999G");
+            } else {
+                clearDir(getCacheDir());
+            }
+            Runtime.getRuntime().gc();
+            ui.postDelayed(() -> {                      // let the system reclaim the memory before measuring
+                cleaning = false;
+                long mem = Math.max(0, availableMemory(am) - memBefore) / (1024 * 1024);
+                long disk = Math.max(0, getFilesDir().getUsableSpace() - diskBefore) / (1024 * 1024);
+                String msg = "Cleaned up · " + (mem >= 10 ? mem + " MB memory" : "memory already tidy")
+                        + (disk >= 1 ? " · " + disk + " MB storage" : "");
+                if (shizuku == SHIZUKU_OFF) msg += "\nStart Shizuku to also close background apps and clear their caches";
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
+            }, 1500);
+        });
+    }
+
+    private static final int SHIZUKU_OFF = 0, SHIZUKU_ASK = 1, SHIZUKU_READY = 2;
+
+    /** Is Shizuku running, and may the launcher use it? Asks for permission (once) when it's running but not granted. */
+    private int shizukuState() {
+        try {
+            if (!rikka.shizuku.Shizuku.pingBinder()) return SHIZUKU_OFF;
+            if (rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED) return SHIZUKU_READY;
+            rikka.shizuku.Shizuku.requestPermission(1);
+            return SHIZUKU_ASK;
+        } catch (Throwable t) {
+            return SHIZUKU_OFF;
+        }
+    }
+
+    /** Run a command as the shell user through Shizuku (its newProcess isn't public API, hence reflection). */
+    private static void shell(String cmd) {
+        try {
+            java.lang.reflect.Method m = rikka.shizuku.Shizuku.class.getDeclaredMethod("newProcess", String[].class, String[].class, String.class);
+            m.setAccessible(true);
+            Process p = (Process) m.invoke(null, new String[]{"sh", "-c", cmd}, null, null);
+            p.waitFor();
+        } catch (Throwable t) {
+            android.util.Log.w("CleanUp", cmd + ": " + t);
+        }
+    }
+
+    private static long availableMemory(ActivityManager am) {
+        ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+        am.getMemoryInfo(mi);
+        return mi.availMem;
+    }
+
+    /** Delete the launcher's own cache files; the browser engine's folders are left alone while it may be running. */
+    private static long clearDir(java.io.File dir) {
+        long freed = 0;
+        java.io.File[] list = dir.listFiles();
+        if (list == null) return 0;
+        for (java.io.File f : list) {
+            String n = f.getName().toLowerCase(java.util.Locale.ROOT);
+            if (n.contains("mozilla") || n.contains("gecko")) continue;
+            if (f.isDirectory()) { freed += clearDir(f); f.delete(); }
+            else { long len = f.length(); if (f.delete()) freed += len; }
+        }
+        return freed;
+    }
+
+    /** Teal-to-green tile with a white broom and sparkles. */
+    private Bitmap cleanGlyph() {
+        int s = dp(64) * 2;
+        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setShader(new android.graphics.LinearGradient(0, 0, 0, s, 0xFF5EE6C8, 0xFF13A86B, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(new android.graphics.RadialGradient(s * 0.5f, -s * 0.15f, s * 0.75f, 0x38FFFFFF, 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(null);
+        p.setColor(Color.WHITE);
+        p.setShadowLayer(s * 0.03f, 0, s * 0.02f, 0x4D00402A);
+        // handle
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStrokeWidth(s * 0.06f);
+        c.drawLine(s * 0.66f, s * 0.20f, s * 0.47f, s * 0.55f, p);
+        // bristles
+        p.setStyle(Paint.Style.FILL);
+        android.graphics.Path head = new android.graphics.Path();
+        head.moveTo(s * 0.40f, s * 0.52f);
+        head.lineTo(s * 0.56f, s * 0.60f);
+        head.lineTo(s * 0.46f, s * 0.82f);
+        head.lineTo(s * 0.22f, s * 0.70f);
+        head.close();
+        c.drawPath(head, p);
+        p.clearShadowLayer();
+        p.setColor(0x6613A86B);
+        p.setStrokeWidth(s * 0.015f);
+        p.setStyle(Paint.Style.STROKE);
+        for (int i = 1; i <= 3; i++) {
+            float t = i / 4f;
+            c.drawLine(s * (0.40f + 0.16f * t), s * (0.52f + 0.08f * t), s * (0.22f + 0.24f * t), s * (0.70f + 0.12f * t), p);
+        }
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(Color.WHITE);
+        sparkle(c, p, s * 0.72f, s * 0.62f, s * 0.08f);
+        sparkle(c, p, s * 0.28f, s * 0.30f, s * 0.055f);
+        sparkle(c, p, s * 0.80f, s * 0.38f, s * 0.04f);
+        return bmp;
+    }
+
+    /** Four-point star. */
+    private static void sparkle(Canvas c, Paint p, float x, float y, float r) {
+        android.graphics.Path star = new android.graphics.Path();
+        float k = r * 0.28f;
+        star.moveTo(x, y - r);
+        star.quadTo(x + k, y - k, x + r, y);
+        star.quadTo(x + k, y + k, x, y + r);
+        star.quadTo(x - k, y + k, x - r, y);
+        star.quadTo(x - k, y - k, x, y - r);
+        star.close();
+        c.drawPath(star, p);
     }
 
     private Bitmap gridGlyph() {
