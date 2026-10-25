@@ -256,7 +256,7 @@ class CameraLayer extends FrameLayout {
     private AnnexBDecoder snapDecoder(int ch) { return isBs(ch) ? lensSnap[lensOf(ch)] : isEu(ch) ? euSnap[euIdx(ch)] : null; }
     private String tileName(int ch) {
         if (isBs(ch)) return "Baseus · " + (lensOf(ch) == 0 ? "Left" : "Right");
-        if (isEu(ch)) return "Eufy · " + euName[euIdx(ch)] + " (" + euCh[euIdx(ch)] + ")";
+        if (isEu(ch)) return euName[euIdx(ch)];
         if (isDb(ch)) return "Google · " + dbName;
         return "Channel " + ch;
     }
@@ -729,7 +729,7 @@ class CameraLayer extends FrameLayout {
             fullSize[0] = d.width(); fullSize[1] = d.height();
             applyTransform(fullVideo, fullSize[0], fullSize[1], false);
             fullStatus.setText((isBs(current) ? "Baseus " + (lensOf(current) == 0 ? "left" : "right") + " lens"
-                    : "Eufy " + euName[euIdx(current)]) + "   ·   ◀ ▶ switch   ·   Back: grid");
+                    : euName[euIdx(current)]) + "   ·   ◀ ▶ switch   ·   Back: grid");
             if (fullSurface != null) d.attach(fullSurface);
             return;
         }
