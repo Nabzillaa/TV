@@ -107,6 +107,15 @@ Android's WebView can't be used: Google refuses account sign-in from it.
   (`--es doorbell clear` removes the tile). Open directly: `--es show doorbell` (or `--es show cameras`).
 - Don't re-enable `com.google.android.apps.tv.launcherx`: it outranks the custom home screen.
 
+## Garage door (Meross MSG100/MSG200, dock button)
+Controlled directly on the LAN through the opener's local HTTP API (`GarageDoor`): POST `http://<ip>/config` with
+a JSON message signed `md5(messageId + key + timestamp)`; no Meross cloud at run time. The panel (`GarageLayer`) shows
+the door's state (polled) and one Open/Close button plus Cancel; OK presses in the first 0.7 s are ignored so a double
+press on the dock icon can't move the door. If the opener's address changes, the TV searches the LAN for its uuid.
+- Setup: `./meross-setup.sh` signs in to Meross once on the Mac (password hidden, never stored or sent to the TV) to
+  get the account key, finds the opener by MAC, checks the key locally, and sends the TV ip/key/uuid/channel/name.
+  `./meross-setup.sh test` reads the door state through the TV; `clear` removes it.
+
 ## Clean up (dock button)
 Frees memory and storage without losing anything. With **Shizuku** running it uses adb-level rights: `am kill-all`
 (stops only processes Android itself treats as safe to stop: idle and cached apps; Google services, Cast, the

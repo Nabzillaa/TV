@@ -119,6 +119,9 @@ public class HomeActivity extends Activity {
     private MatrixView matrix;
     private TextView banner;
     private CameraLayer cameras;
+    private GarageDoor garage;
+    private GarageLayer garageLayer;
+    private View garageDockItem;
     private View cameraDockItem;
     private TextView wxIcon, wxTemp, wxDetail;
     private static final long WX_REFRESH_MS = 30 * 60_000L;
@@ -193,6 +196,9 @@ public class HomeActivity extends Activity {
         cameras = new CameraLayer(this, ui, prefs);
         cameras.reload();
         root.addView(cameras, new FrameLayout.LayoutParams(-1, -1));
+        garage = new GarageDoor(prefs);
+        garageLayer = new GarageLayer(this, ui, garage);
+        root.addView(garageLayer, new FrameLayout.LayoutParams(-1, -1));
 
         matrix = new MatrixView(this);
         matrix.setVisibility(View.GONE);
@@ -222,6 +228,7 @@ public class HomeActivity extends Activity {
         BaseusSetup.handle(this, prefs, i);
         boolean eufyHideChange = i != null && i.hasExtra("eufy_hide");
         EufySetup.handle(this, prefs, i);
+        if (GarageDoor.handle(prefs, i) && garageLayer != null) rebuildDock();
         if (eufyHideChange) { cameras.reload(); rebuildDock(); }
         String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell
         if (show != null) {
@@ -617,6 +624,7 @@ public class HomeActivity extends Activity {
         showAllApps(false);
         neofetchLayer.setVisibility(View.GONE);
         cameras.close();
+        garageLayer.close();
         if (matrix.getVisibility() == View.VISIBLE) matrix.stop();
         exitAmbient();
     }
@@ -624,6 +632,10 @@ public class HomeActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (matrix.getVisibility() == View.VISIBLE) matrix.stop();
+        else if (garageLayer.isOpen()) {
+            garageLayer.close();
+            if (garageDockItem != null) garageDockItem.requestFocus();
+        }
         else if (cameras.isOpen()) {
             cameras.back();
             if (!cameras.isOpen() && cameraDockItem != null) cameraDockItem.requestFocus(); // back on the Cameras icon
@@ -646,7 +658,7 @@ public class HomeActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent e) {
-        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE && !cameras.isOpen();
+        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE && !cameras.isOpen() && !garageLayer.isOpen();
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             if (!base && allAppsLayer.getVisibility() == View.VISIBLE) {
                 int pos = grid.getSelectedItemPosition();
@@ -695,7 +707,7 @@ public class HomeActivity extends Activity {
     }
 
     private void enterAmbient() {
-        if (allAppsLayer.getVisibility() == View.VISIBLE || neofetchLayer.getVisibility() == View.VISIBLE || cameras.isOpen()) {
+        if (allAppsLayer.getVisibility() == View.VISIBLE || neofetchLayer.getVisibility() == View.VISIBLE || cameras.isOpen() || garageLayer.isOpen()) {
             ui.postDelayed(idleRunnable, IDLE_MS);
             return;
         }
@@ -803,6 +815,10 @@ public class HomeActivity extends Activity {
         if (cameras != null && cameras.configured())
             dock.addView(cameraDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), cameraGlyph()),
                     "Cameras", () -> cameras.open(), () -> ui.postDelayed(() -> { if (dock.findFocus() != null && cameras != null) cameras.prewarm(); }, 250)));
+        garageDockItem = null;
+        if (garage != null && garage.configured())
+            dock.addView(garageDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), garageGlyph()),
+                    "Garage", () -> garageLayer.open()));
         View clean = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), cleanGlyph()), "Clean up", null);
         clean.setOnClickListener(v -> cleanUp(v));
         dock.addView(clean);
@@ -1006,6 +1022,44 @@ public class HomeActivity extends Activity {
             else { long len = f.length(); if (f.delete()) freed += len; }
         }
         return freed;
+    }
+
+    /** Warm orange tile with a white house front and a ribbed garage door. */
+    private Bitmap garageGlyph() {
+        int s = dp(64) * 2;
+        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setShader(new android.graphics.LinearGradient(0, 0, 0, s, 0xFFFFB340, 0xFFE8590C, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(new android.graphics.RadialGradient(s * 0.5f, -s * 0.15f, s * 0.75f, 0x38FFFFFF, 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(null);
+        // house outline: roof and walls
+        android.graphics.Path house = new android.graphics.Path();
+        house.moveTo(s * 0.50f, s * 0.18f);
+        house.lineTo(s * 0.84f, s * 0.42f);
+        house.lineTo(s * 0.84f, s * 0.82f);
+        house.lineTo(s * 0.16f, s * 0.82f);
+        house.lineTo(s * 0.16f, s * 0.42f);
+        house.close();
+        p.setColor(Color.WHITE);
+        p.setStyle(Paint.Style.FILL_AND_STROKE);
+        p.setStrokeJoin(Paint.Join.ROUND);
+        p.setStrokeWidth(s * 0.03f);
+        p.setShadowLayer(s * 0.03f, 0, s * 0.02f, 0x4D6B2A00);
+        c.drawPath(house, p);
+        p.clearShadowLayer();
+        // door opening with horizontal panels
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xFFE8590C);
+        c.drawRoundRect(new RectF(s * 0.28f, s * 0.48f, s * 0.72f, s * 0.82f), s * 0.03f, s * 0.03f, p);
+        p.setColor(Color.WHITE);
+        for (int i = 0; i < 3; i++) {
+            float y = s * (0.53f + i * 0.09f);
+            c.drawRoundRect(new RectF(s * 0.32f, y, s * 0.68f, y + s * 0.05f), s * 0.015f, s * 0.015f, p);
+        }
+        return bmp;
     }
 
     /** Teal-to-green tile with a white broom and sparkles. */
