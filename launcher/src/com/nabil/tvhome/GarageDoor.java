@@ -44,8 +44,9 @@ final class GarageDoor {
     /** Blocking: read the door state. */
     State state() {
         try {
-            JSONObject r = call("Appliance.GarageDoor.State", "GET", new JSONObject());
-            JSONArray st = r.getJSONObject("payload").getJSONArray("state");
+            // System.All carries the door state in its digest; GarageDoor.State GET can hang on some firmware
+            JSONObject r = call("Appliance.System.All", "GET", new JSONObject());
+            JSONArray st = r.getJSONObject("payload").getJSONObject("all").getJSONObject("digest").getJSONArray("garageDoor");
             int ch = prefs.getInt("gd_ch", 0);
             for (int i = 0; i < st.length(); i++) {
                 JSONObject s = st.getJSONObject(i);
@@ -77,12 +78,12 @@ final class GarageDoor {
     private JSONObject call(String ns, String method, JSONObject payload) throws Exception {
         String ip = prefs.getString("gd_ip", null);
         if (ip != null) {
-            try { return post(ip, ns, method, payload, 4000); } catch (java.io.IOException e) { Log.i(TAG, "not at " + ip + ", searching"); }
+            try { return post(ip, ns, method, payload, 10_000); } catch (java.io.IOException e) { Log.i(TAG, "not at " + ip + ", searching"); }
         }
         String found = find();
         if (found == null) throw new java.io.IOException("opener not found on the network");
         prefs.edit().putString("gd_ip", found).apply();
-        return post(found, ns, method, payload, 4000);
+        return post(found, ns, method, payload, 10_000);
     }
 
     /** Ask every address in the TV's /24 for its uuid; the opener answers with the matching one. */

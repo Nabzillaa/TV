@@ -38,12 +38,12 @@ def call(base, path, params, token=None):
     req = urllib.request.Request(base + path, data=json.dumps({"params": enc, "sign": sign, "timestamp": ts, "nonce": nonce}).encode(), headers=h)
     return json.load(urllib.request.urlopen(req, timeout=20))
 
-def local(ip, key, ns, method="GET", payload=None):
+def local(ip, key, ns, method="GET", payload=None, timeout=15):
     mid = os.urandom(16).hex(); ts = int(time.time())
     body = {"header": {"messageId": mid, "namespace": ns, "method": method, "payloadVersion": 1, "from": "/app/tv/subscribe",
                        "timestamp": ts, "sign": hashlib.md5((mid + key + str(ts)).encode()).hexdigest()}, "payload": payload or {}}
     req = urllib.request.Request(f"http://{ip}/config", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
-    return json.load(urllib.request.urlopen(req, timeout=8))
+    return json.load(urllib.request.urlopen(req, timeout=timeout))
 
 login = {"email": os.environ["MEROSS_EMAIL"], "password": hashlib.md5(os.environ["MEROSS_PASSWORD"].encode()).hexdigest(),
          "encryption": 1, "accountCountryCode": "", "mfaCode": None, "agree": 0,
@@ -75,7 +75,7 @@ if not ip:                                                  # not in the ARP cac
     me = socket.gethostbyname(socket.gethostname()).rsplit(".", 1)[0]
     def probe(a):
         try:
-            r = local(a, key, "Appliance.System.All")
+            r = local(a, key, "Appliance.System.All", timeout=4)
             return a if r["payload"]["all"]["system"]["hardware"]["uuid"] == uuid else None
         except Exception:
             return None
@@ -83,10 +83,18 @@ if not ip:                                                  # not in the ARP cac
         ip = next((a for a in ex.map(probe, [f"{me}.{i}" for i in range(1, 255)]) if a), None)
 if not ip:
     sys.exit("Couldn't find the opener (MAC %s) on the network; is it online?" % mac)
-st = local(ip, key, "Appliance.GarageDoor.State")
+# Appliance.System.All carries the door state in its digest (GarageDoor.State can hang on some firmware)
+st = None
+for attempt in range(2):
+    try:
+        st = local(ip, key, "Appliance.System.All"); break
+    except Exception as e:
+        err = e
+if st is None:
+    sys.exit("The opener at %s didn't answer: %s" % (ip, err))
 if st["header"].get("method") == "ERROR":
     sys.exit("The opener at %s rejected the key: %s" % (ip, st.get("payload")))
-states = st["payload"]["state"]
+states = st["payload"]["all"]["digest"]["garageDoor"]
 ch = states[0].get("channel", 0)
 print("OK|%s|%s|%s|%d|%s|%s" % (ip, key, uuid, ch, name, "open" if states[0].get("open") else "closed"), end="")
 PY
