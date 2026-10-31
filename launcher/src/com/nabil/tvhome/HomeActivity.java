@@ -220,6 +220,8 @@ public class HomeActivity extends Activity {
         root.addView(banner, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
         setContentView(root);
+        // no click on every remote move: Android plays it on the view that takes focus, so silence each one as it does
+        root.getViewTreeObserver().addOnGlobalFocusChangeListener((was, now) -> { if (now != null) now.setSoundEffectsEnabled(false); });
         handleBanner(getIntent());
     }
 
