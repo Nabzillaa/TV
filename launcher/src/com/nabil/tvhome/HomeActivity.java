@@ -197,7 +197,7 @@ public class HomeActivity extends Activity {
         cameras.reload();
         root.addView(cameras, new FrameLayout.LayoutParams(-1, -1));
         garage = new GarageDoor(prefs);
-        garageLayer = new GarageLayer(this, ui, garage);
+        garageLayer = new GarageLayer(this, ui, garage, prefs);
         root.addView(garageLayer, new FrameLayout.LayoutParams(-1, -1));
 
         matrix = new MatrixView(this);
@@ -230,10 +230,10 @@ public class HomeActivity extends Activity {
         EufySetup.handle(this, prefs, i);
         if (GarageDoor.handle(prefs, i) && garageLayer != null) rebuildDock();
         if (eufyHideChange) { cameras.reload(); rebuildDock(); }
-        String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell
+        String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell|garage
         if (show != null) {
             i.removeExtra("show");
-            ui.post(() -> { if (show.equals("doorbell")) cameras.showDoorbell(); else cameras.open(); });
+            ui.post(() -> { if (show.equals("doorbell")) cameras.showDoorbell(); else if (show.equals("garage")) garageLayer.open(); else cameras.open(); });
         }
         String db = i == null ? null : i.getStringExtra("doorbell");     // --es doorbell "Name|https://home.google.com/..." (or clear)
         if (db != null) {

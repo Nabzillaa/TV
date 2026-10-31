@@ -110,8 +110,10 @@ Android's WebView can't be used: Google refuses account sign-in from it.
 ## Garage door (Meross MSG100/MSG200, dock button)
 Controlled directly on the LAN through the opener's local HTTP API (`GarageDoor`): POST `http://<ip>/config` with
 a JSON message signed `md5(messageId + key + timestamp)`; no Meross cloud at run time. The panel (`GarageLayer`) shows
-the door's state (polled) and one Open/Close button plus Cancel; OK presses in the first 0.7 s are ignored so a double
-press on the dock icon can't move the door. If the opener's address changes, the TV searches the LAN for its uuid.
+the NVR camera that watches the door live (channel 1, pref `gd_cam`; main stream, sub-stream fallback) beside a card
+with an illustrated door that moves with the real one, its state (polled) and one Open/Close button plus Close; OK
+presses in the first 0.7 s are ignored so a double press on the dock icon can't move the door. Open it directly with
+`adb shell am start -n com.nabil.tvhome/.HomeActivity --es show garage`. If the opener's address changes, the TV searches the LAN for its uuid.
 - Setup: `./meross-setup.sh` signs in to Meross once on the Mac (password hidden, never stored or sent to the TV) to
   get the account key, finds the opener by MAC, checks the key locally, and sends the TV ip/key/uuid/channel/name.
   `./meross-setup.sh test` reads the door state through the TV; `clear` removes it.
