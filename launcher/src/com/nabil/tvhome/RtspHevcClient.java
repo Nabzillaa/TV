@@ -76,6 +76,26 @@ class RtspHevcClient {
         this.listener = l;
     }
 
+    private String path;      // null: the live stream
+    private String base;
+    private final Object writeLock = new Object();
+    private long lastTs = -1, mediaTicks;
+    private volatile long mediaMs;
+
+    /** Play the NVR's recording between two of its clock times (yyyy_MM_dd_HH_mm_ss) instead of the live stream. */
+    RtspHevcClient playback(String from, String to) {
+        path = "/cam/playback?channel=" + channel + "&subtype=" + subtype + "&starttime=" + from + "&endtime=" + to;
+        return this;
+    }
+
+    /** Video time received so far, from the RTP clock: how far into a recording playback has got. */
+    long mediaMs() { return mediaMs; }
+
+    /** Blocking (network): pause or resume a recording. The answer is read by the stream's own thread. */
+    void pause(boolean paused) {
+        try { send(paused ? "PAUSE" : "PLAY", null); } catch (Exception e) { Log.w(TAG, "pause: " + e); }
+    }
+
     void start(Surface s) {
         surface = s;
         t0 = System.currentTimeMillis();
@@ -121,7 +141,7 @@ class RtspHevcClient {
 
     private void run() {
         try {
-            String base = "rtsp://" + host + ":554/cam/realmonitor?channel=" + channel + "&subtype=" + subtype;
+            base = "rtsp://" + host + ":554" + (path != null ? path : "/cam/realmonitor?channel=" + channel + "&subtype=" + subtype);
             socket = new Socket();
             socket.connect(new InetSocketAddress(host, 554), 5000);
             socket.setSoTimeout(5000);
@@ -211,7 +231,25 @@ class RtspHevcClient {
     }
 
     private Resp request(String method, String uri, String extra, boolean auth) throws IOException {
-        StringBuilder sb = new StringBuilder(method + " " + uri + " RTSP/1.0\r\nCSeq: " + (cseq++) + "\r\nUser-Agent: tvhome\r\n");
+        write(build(method, uri, extra, auth));
+        return readResponse(null);
+    }
+
+    /** A request sent while the read loop owns the input (it reads the answer). */
+    private void send(String method, String extra) throws IOException {
+        if (out == null || session == null) throw new IOException("Not playing");
+        write(build(method, base, extra, true));
+    }
+
+    private void write(String req) throws IOException {
+        synchronized (writeLock) {
+            out.write(req.getBytes("UTF-8"));
+            out.flush();
+        }
+    }
+
+    private String build(String method, String uri, String extra, boolean auth) {
+        StringBuilder sb = new StringBuilder(method + " " + uri + " RTSP/1.0\r\nCSeq: " + nextSeq() + "\r\nUser-Agent: tvhome\r\n");
         if (session != null && !method.equals("DESCRIBE")) sb.append("Session: ").append(session).append("\r\n");
         if (auth && nonce != null) {
             String ha1 = md5(user + ":" + realm + ":" + pass), ha2 = md5(method + ":" + uri);
@@ -221,10 +259,10 @@ class RtspHevcClient {
         }
         if (extra != null) sb.append(extra);
         sb.append("\r\n");
-        out.write(sb.toString().getBytes("UTF-8"));
-        out.flush();
-        return readResponse(null);
+        return sb.toString();
     }
+
+    private synchronized int nextSeq() { return cseq++; }
 
     /** Reads an RTSP response; if firstByte is non-null it was already consumed from the stream. */
     private Resp readResponse(Integer firstByte) throws IOException {
@@ -269,9 +307,7 @@ class RtspHevcClient {
             if (b == -1) throw new IOException("Stream ended");
             long now = System.currentTimeMillis();
             if (now - lastKeepalive > 20_000) {
-                String hdr = "CSeq: " + (cseq++) + "\r\nSession: " + session + "\r\n";
-                out.write(("GET_PARAMETER " + base + " RTSP/1.0\r\n" + hdr + "\r\n").getBytes("UTF-8"));
-                out.flush();
+                write("GET_PARAMETER " + base + " RTSP/1.0\r\nCSeq: " + nextSeq() + "\r\nSession: " + session + "\r\n\r\n");
                 lastKeepalive = now;
             }
             if (b == -2) continue;
@@ -296,6 +332,14 @@ class RtspHevcClient {
         int off = 12 + 4 * cc;
         if (ext && len >= off + 4) off += 4 + (((d[off + 2] & 0xff) << 8) | (d[off + 3] & 0xff)) * 4;
         if (off >= len) return;
+
+        if (lastTs >= 0) {
+            long dt = (int) (ts - lastTs);           // signed: the 32-bit clock wraps
+            if (dt > 0 && dt < 90_000 * 10) mediaTicks += dt;
+            else if (dt != 0 && path != null) Log.d(TAG, "ch" + channel + " RTP clock jumped " + dt / 90 + " ms");
+        }
+        lastTs = ts;
+        mediaMs = mediaTicks / 90;
 
         if (auTs != -1 && ts != auTs) flushAu(); // new frame began without a marker on the last packet
         auTs = ts;

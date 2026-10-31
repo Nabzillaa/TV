@@ -48,6 +48,18 @@ Use a view-only NVR account, not admin.
   logins in a row pause all login attempts for 5 minutes so a wrong password cannot lock the NVR.
 - Plain HTTP is allowed for the app (`usesCleartextTraffic`) because the NVR serves snapshots over HTTP on the LAN.
 
+### Playback (NVR channels)
+- In a full-screen NVR channel, OK (or Down) opens a 24 hour timeline over the live picture (`NvrPlayback`):
+  recordings in blue, motion and other events in orange, the future dimmed. Left/Right moves the cursor a minute
+  (hold to speed up to 5 and 15 minutes, across midnight into earlier days), Up/Down jumps to the previous/next
+  motion, OK plays from there. While playing, any arrow or OK brings the timeline back, play/pause pauses,
+  rewind/fast-forward skip 30 s, Back returns to live.
+- Recordings are listed with `mediaFileFind.cgi` (factory.create → findFile → findNextFile → close/destroy) and
+  played over RTSP `/cam/playback?channel=N&subtype=0&starttime=YYYY_MM_DD_HH_MM_SS&endtime=…`, which the NVR
+  paces in real time; PAUSE/PLAY go over the same RTSP session. The playing time is the start plus the RTP clock.
+- Everything is on the NVR's clock (read from `global.cgi?action=getCurrentTime`), which is what its picture's
+  timestamp shows.
+
 ## Why the stock launcher and setup wizard are disabled
 ChiQ's TV agent starts `com.google.android.apps.tv.launcherx` directly on every Home press, bypassing the
 default-home setting. With it disabled, Home resolves to `com.google.android.tungsten.setupwraith/.RecoveryActivity`

@@ -77,6 +77,7 @@ class CameraLayer extends FrameLayout {
     private final ImageView fullImage;
     private final TextureView fullVideo;
     private final TextView fullLabel, fullStatus;
+    private NvrPlayback playback;
     private Surface fullSurface;
     private RtspHevcClient fullClient, fullPreview;
     private int fullSubtype;
@@ -141,11 +142,35 @@ class CameraLayer extends FrameLayout {
         fullVideo.setFocusable(true);
         fullVideo.setOnKeyListener((v, code, e) -> {
             if (e.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (playback.active()) return playback.key(code, e);
+            if (isNvr(current) && !fullSnap && (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+                    || code == KeyEvent.KEYCODE_DPAD_DOWN || code == KeyEvent.KEYCODE_MEDIA_REWIND)) {
+                if (e.getRepeatCount() == 0) playback.open(current);
+                return true;
+            }
             if (code == KeyEvent.KEYCODE_DPAD_RIGHT) { switchTo(current % streamTiles() + 1); return true; }
             if (code == KeyEvent.KEYCODE_DPAD_LEFT) { switchTo(current == 1 ? streamTiles() : current - 1); return true; }
             return false;
         });
         fullBox.addView(fullVideo, new LayoutParams(-1, -1));
+        playback = new NvrPlayback(c, ui, new NvrPlayback.Host() {
+            @Override public Surface surface() { return fullSurface; }
+            @Override public void videoSize(int w, int h) { fullSize[0] = w; fullSize[1] = h; applyTransform(fullVideo, w, h, false); }
+            @Override public void stopLive() {
+                ui.removeCallbacks(upgradeCheck);
+                RtspHevcClient prev = fullPreview, main = fullClient;
+                fullPreview = null;
+                if (prev != null) prev.detach();     // free the surface now; the grid tile keeps streaming
+                if (main != null) main.detach();
+                stopFullClient();
+                fullSnap = false;
+                fullImage.setImageDrawable(null);
+            }
+            @Override public void startLive() { if (fullMode) showPreviewThenMain(); }
+            @Override public void status(String st) { fullStatus.setText(st); }
+            @Override public void barShown(boolean shown) { fullStatus.setVisibility(shown ? INVISIBLE : VISIBLE); }
+        });
+        fullBox.addView(playback, new LayoutParams(-1, -1));
         fullLabel = overlayText(c, 18);
         LayoutParams lp = new LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         lp.setMargins(dp(24), dp(16), 0, 0);
@@ -195,6 +220,7 @@ class CameraLayer extends FrameLayout {
         user = prefs.getString("nvr_user", "");
         pass = prefs.getString("nvr_pass", "");
         snap = new NvrClient(host, user, pass);
+        playback.setNvr(host, user, pass);
         channels = Math.max(1, Math.min(MAX - 2, prefs.getInt("nvr_n", 4)));
         baseusOn = prefs.getString("bs_user", null) != null && prefs.getString("bs_pass", null) != null;
         eufyOn = prefs.getString("eu_user", null) != null && prefs.getString("eu_pass", null) != null;
@@ -251,6 +277,9 @@ class CameraLayer extends FrameLayout {
     private int euIdx(int ch) { return ch - channels - (baseusOn ? 2 : 0) - 1; }
     private boolean isDb(int ch) { return dbUrl != null && ch == tiles; }
     private int streamTiles() { return Math.max(1, dbUrl != null ? tiles - 1 : tiles); }   // tiles that play here
+    private boolean isNvr(int ch) { return ch >= 1 && ch <= channels; }    // NVR channels have recordings
+    /** Remote keys for the full-screen picture. */
+    private String hint() { return (isNvr(current) ? "OK: playback   ·   " : "") + "◀ ▶ switch   ·   Back: grid"; }
     private boolean isLive(int ch) { return isBs(ch) || isEu(ch); }          // tiles that run on a non-NVR stream
     private AnnexBDecoder liveDecoder(int ch) { return isBs(ch) ? lensDec[lensOf(ch)] : isEu(ch) ? euDec[euIdx(ch)] : null; }
     private AnnexBDecoder snapDecoder(int ch) { return isBs(ch) ? lensSnap[lensOf(ch)] : isEu(ch) ? euSnap[euIdx(ch)] : null; }
@@ -417,6 +446,7 @@ class CameraLayer extends FrameLayout {
 
     /** Back: full screen -> grid -> closed. */
     void back() {
+        if (fullMode && playback.back()) return;
         if (fullMode) {
             leaveFull();
         } else {
@@ -430,6 +460,7 @@ class CameraLayer extends FrameLayout {
         snapRunning = false;
         synchronized (snapChannels) { snapChannels.clear(); }
         fullSnap = false;
+        playback.stop();
         stopFullClient();
         hideDoorbell();
         for (int ch = 1; ch <= MAX; ch++) detachTile(ch);
@@ -449,6 +480,7 @@ class CameraLayer extends FrameLayout {
     /** Leaving the launcher: drop every stream. */
     void shutdown() {
         ui.removeCallbacks(warmStop);
+        playback.stop();
         hideDoorbell();
         stopAll();
         setVisibility(GONE);
@@ -736,7 +768,7 @@ class CameraLayer extends FrameLayout {
             fullSize[0] = d.width(); fullSize[1] = d.height();
             applyTransform(fullVideo, fullSize[0], fullSize[1], false);
             fullStatus.setText((isBs(current) ? "Baseus " + (lensOf(current) == 0 ? "left" : "right") + " lens"
-                    : euName[euIdx(current)]) + "   ·   ◀ ▶ switch   ·   Back: grid");
+                    : euName[euIdx(current)]) + "   ·   " + hint());
             if (fullSurface != null) d.attach(fullSurface);
             return;
         }
@@ -748,8 +780,8 @@ class CameraLayer extends FrameLayout {
             final int ch = current;
             RtspHevcClient main = new RtspHevcClient(host, user, pass, ch, 0, new RtspHevcClient.Listener() {
                 @Override public void onVideoSize(int w, int h) { ui.post(() -> { if (fullPreview == null && ch == current) { fullSize[0] = w; fullSize[1] = h; applyTransform(fullVideo, w, h, false); } }); }
-                @Override public void onFirstFrame() { ui.post(() -> { if (ch == current) fullStatus.setText("Main stream   ·   ◀ ▶ switch   ·   Back: grid"); }); }
-                @Override public void onError(String m) { ui.post(() -> { if (ch == current && fullClient != null && fullPreview != null) { fullClient = null; fullStatus.setText("Sub stream   ·   ◀ ▶ switch   ·   Back: grid"); } }); }
+                @Override public void onFirstFrame() { ui.post(() -> { if (ch == current) fullStatus.setText("Main stream   ·   " + hint()); }); }
+                @Override public void onError(String m) { ui.post(() -> { if (ch == current && fullClient != null && fullPreview != null) { fullClient = null; fullStatus.setText("Sub stream   ·   " + hint()); } }); }
             });
             fullClient = main;
             main.start(null);
@@ -775,6 +807,7 @@ class CameraLayer extends FrameLayout {
     };
 
     private void leaveFull() {
+        playback.stop();
         hideDoorbell();
         fullMode = false;
         ui.removeCallbacks(upgradeCheck);
@@ -791,6 +824,7 @@ class CameraLayer extends FrameLayout {
     }
 
     private void switchTo(int ch) {
+        playback.stop();
         { AnnexBDecoder ld2 = liveDecoder(current); if (ld2 != null) ld2.detach(); }
         current = ch;
         RtspHevcClient oldPreview = fullPreview;
@@ -812,7 +846,7 @@ class CameraLayer extends FrameLayout {
         final int ch = current, sub = fullSubtype;
         RtspHevcClient c = new RtspHevcClient(host, user, pass, ch, sub, new RtspHevcClient.Listener() {
             @Override public void onVideoSize(int w, int h) { ui.post(() -> { fullSize[0] = w; fullSize[1] = h; applyTransform(fullVideo, w, h, false); }); }
-            @Override public void onFirstFrame() { ui.post(() -> fullStatus.setText((sub == 0 ? "Main stream" : "Sub stream") + "   ·   ◀ ▶ switch   ·   Back: grid")); }
+            @Override public void onFirstFrame() { ui.post(() -> fullStatus.setText((sub == 0 ? "Main stream" : "Sub stream") + "   ·   " + hint())); }
             @Override public void onError(String m) { ui.post(() -> fullFailed(ch, sub, m)); }
         });
         fullClient = c;
