@@ -54,6 +54,27 @@ class NvrClient {
         return parseTime(now) - System.currentTimeMillis();
     }
 
+    /** --es nvr_time show|set: report the NVR's clock and time settings, or set it to this TV's (network) time and
+     *  keep it there with NTP. Logged under NvrClient; no secrets in the output. */
+    static void time(String host, String user, String pass, String what) {
+        new Thread(() -> {
+            NvrClient n = new NvrClient(host, user, pass);
+            String[] show = {"/cgi-bin/global.cgi?action=getCurrentTime", "/cgi-bin/configManager.cgi?action=getConfig&name=NTP",
+                    "/cgi-bin/configManager.cgi?action=getConfig&name=Locales"};
+            try {
+                if (what.equals("set")) {
+                    String now = new SimpleDateFormat("yyyy-MM-dd'%20'HH:mm:ss", Locale.US).format(new Date());
+                    Log.i(TAG, "set time: " + n.text("/cgi-bin/global.cgi?action=setCurrentTime&time=" + now).trim());
+                    Log.i(TAG, "enable NTP: " + n.text("/cgi-bin/configManager.cgi?action=setConfig&NTP.Enable=true").trim());
+                }
+                Log.i(TAG, "TV time: " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(new Date()));
+                for (String q : show) for (String l : n.text(q).split("\r?\n")) if (!l.trim().isEmpty()) Log.i(TAG, l.trim());
+            } catch (Exception e) {
+                Log.w(TAG, "time: " + e.getMessage());
+            }
+        }, "nvr-time").start();
+    }
+
     /** The channel's recordings overlapping [from, to) on the NVR clock, sorted: {start, end, 1 if motion/event}. */
     synchronized List<long[]> recordings(int channel, long from, long to) throws IOException {
         String base = "/cgi-bin/mediaFileFind.cgi?action=";

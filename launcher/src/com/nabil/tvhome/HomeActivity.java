@@ -243,6 +243,11 @@ public class HomeActivity extends Activity {
             else if (d.length == 2 && d[1].startsWith("https://")) prefs.edit().putString("db_name", d[0]).putString("db_url", d[1]).apply();
             cameras.reload();
         }
+        String t = i == null ? null : i.getStringExtra("nvr_time");
+        if (t != null && cameras.configured()) {
+            i.removeExtra("nvr_time");
+            NvrClient.time(prefs.getString("nvr_host", ""), prefs.getString("nvr_user", ""), prefs.getString("nvr_pass", ""), t);
+        }
         String v = i == null ? null : i.getStringExtra("nvr");
         if (v == null || v.isEmpty()) return;
         i.removeExtra("nvr");

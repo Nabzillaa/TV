@@ -59,6 +59,9 @@ Use a view-only NVR account, not admin.
   paces in real time; PAUSE/PLAY go over the same RTSP session. The playing time is the start plus the RTP clock.
 - Everything is on the NVR's clock (read from `global.cgi?action=getCurrentTime`), which is what its picture's
   timestamp shows.
+- NVR clock: `adb shell "am start -n com.nabil.tvhome/.HomeActivity --es nvr_time show"` logs it with its NTP and
+  time zone settings (logcat tag `NvrClient`); `--es nvr_time set` sets it to the TV's time and turns NTP on. It had
+  drifted 13 minutes fast with NTP off; fixed 2026-11-01 (NTP time.windows.com, time zone Canberra, DST on).
 
 ## Why the stock launcher and setup wizard are disabled
 ChiQ's TV agent starts `com.google.android.apps.tv.launcherx` directly on every Home press, bypassing the
@@ -144,4 +147,3 @@ page (the next doorbell open loads it fresh). The toast reports the memory and s
 ## Known loose ends
 - YouTube (`com.google.android.youtube.tv`) was disabled by something other than this project; re-enable with
   `adb shell pm enable com.google.android.youtube.tv` if you want it back.
-- The NVR clock runs about 12 minutes ahead of the TV.
