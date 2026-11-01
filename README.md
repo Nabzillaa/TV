@@ -133,6 +133,21 @@ presses in the first 0.7 s are ignored so a double press on the dock icon can't 
   get the account key, finds the opener by MAC, checks the key locally, and sends the TV ip/key/uuid/channel/name.
   `./meross-setup.sh test` reads the door state through the TV; `clear` removes it.
 
+## Solar (Solis inverter + battery, dock button)
+The Solis S3 WiFi stick (192.168.1.109) only talks to SolisCloud (no local ports), so the screen uses the free
+SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Management) for a KeyID and KeySecret, then
+
+    ./solis-setup.sh          # asks for them (secret hidden), finds the plant, sends them to the TV
+    ./solis-setup.sh test     # logs every field the TV reads (logcat tag Solis)
+    ./solis-setup.sh demo     # made-up data, to preview the screen;  clear  removes it
+
+- `SolarLayer`: animated power flow (solar, grid, home, battery around the inverter; dots run the way the power goes,
+  faster with more of it), the battery's charge ring and today's energy (generated, used, bought, sold, charged,
+  discharged), and today's solar / home / battery % chart. Polls every minute; SolisCloud itself refreshes every 5.
+- `SolisCloud`: signed requests (HmacSHA1 over POST, Content-MD5, Content-Type, Date, path) to
+  `/v1/api/stationDetail` and `/v1/api/stationDay`. Battery and grid directions are learnt from the energy balance
+  (solar + bought = home + charging + sold) and kept in prefs `sc_sb`/`sc_sg`, as their signs vary by firmware.
+
 ## Clean up (dock button)
 Frees memory and storage without losing anything. With **Shizuku** running it uses adb-level rights: `am kill-all`
 (stops only processes Android itself treats as safe to stop: idle and cached apps; Google services, Cast, the

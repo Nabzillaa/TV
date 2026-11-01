@@ -122,6 +122,9 @@ public class HomeActivity extends Activity {
     private GarageDoor garage;
     private GarageLayer garageLayer;
     private View garageDockItem;
+    private SolisCloud solis;
+    private SolarLayer solarLayer;
+    private View solarDockItem;
     private View cameraDockItem;
     private TextView wxIcon, wxTemp, wxDetail;
     private static final long WX_REFRESH_MS = 30 * 60_000L;
@@ -199,6 +202,9 @@ public class HomeActivity extends Activity {
         garage = new GarageDoor(prefs);
         garageLayer = new GarageLayer(this, ui, garage, prefs);
         root.addView(garageLayer, new FrameLayout.LayoutParams(-1, -1));
+        solis = new SolisCloud(prefs);
+        solarLayer = new SolarLayer(this, ui, solis);
+        root.addView(solarLayer, new FrameLayout.LayoutParams(-1, -1));
 
         matrix = new MatrixView(this);
         matrix.setVisibility(View.GONE);
@@ -231,11 +237,12 @@ public class HomeActivity extends Activity {
         boolean eufyHideChange = i != null && i.hasExtra("eufy_hide");
         EufySetup.handle(this, prefs, i);
         if (GarageDoor.handle(prefs, i) && garageLayer != null) rebuildDock();
+        if (SolisCloud.handle(prefs, i) && solarLayer != null) rebuildDock();
         if (eufyHideChange) { cameras.reload(); rebuildDock(); }
-        String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell|garage
+        String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell|garage|solar
         if (show != null) {
             i.removeExtra("show");
-            ui.post(() -> { if (show.equals("doorbell")) cameras.showDoorbell(); else if (show.equals("garage")) garageLayer.open(); else cameras.open(); });
+            ui.post(() -> { if (show.equals("doorbell")) cameras.showDoorbell(); else if (show.equals("garage")) garageLayer.open(); else if (show.equals("solar")) solarLayer.open(); else cameras.open(); });
         }
         String db = i == null ? null : i.getStringExtra("doorbell");     // --es doorbell "Name|https://home.google.com/..." (or clear)
         if (db != null) {
@@ -632,6 +639,7 @@ public class HomeActivity extends Activity {
         neofetchLayer.setVisibility(View.GONE);
         cameras.close();
         garageLayer.close();
+        solarLayer.close();
         if (matrix.getVisibility() == View.VISIBLE) matrix.stop();
         exitAmbient();
     }
@@ -642,6 +650,10 @@ public class HomeActivity extends Activity {
         else if (garageLayer.isOpen()) {
             garageLayer.close();
             if (garageDockItem != null) garageDockItem.requestFocus();
+        }
+        else if (solarLayer.isOpen()) {
+            solarLayer.close();
+            if (solarDockItem != null) solarDockItem.requestFocus();
         }
         else if (cameras.isOpen()) {
             cameras.back();
@@ -665,7 +677,7 @@ public class HomeActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent e) {
-        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE && !cameras.isOpen() && !garageLayer.isOpen();
+        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE && !cameras.isOpen() && !garageLayer.isOpen() && !solarLayer.isOpen();
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             if (!base && allAppsLayer.getVisibility() == View.VISIBLE) {
                 int pos = grid.getSelectedItemPosition();
@@ -714,7 +726,7 @@ public class HomeActivity extends Activity {
     }
 
     private void enterAmbient() {
-        if (allAppsLayer.getVisibility() == View.VISIBLE || neofetchLayer.getVisibility() == View.VISIBLE || cameras.isOpen() || garageLayer.isOpen()) {
+        if (allAppsLayer.getVisibility() == View.VISIBLE || neofetchLayer.getVisibility() == View.VISIBLE || cameras.isOpen() || garageLayer.isOpen() || solarLayer.isOpen()) {
             ui.postDelayed(idleRunnable, IDLE_MS);
             return;
         }
@@ -826,6 +838,10 @@ public class HomeActivity extends Activity {
         if (garage != null && garage.configured())
             dock.addView(garageDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), garageGlyph()),
                     "Garage", () -> garageLayer.open()));
+        solarDockItem = null;
+        if (solis != null && solis.configured())
+            dock.addView(solarDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), solarGlyph()),
+                    "Solar", () -> solarLayer.open()));
         View clean = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), cleanGlyph()), "Clean up", null);
         clean.setOnClickListener(v -> cleanUp(v));
         dock.addView(clean);
@@ -1066,6 +1082,59 @@ public class HomeActivity extends Activity {
             float y = s * (0.53f + i * 0.09f);
             c.drawRoundRect(new RectF(s * 0.32f, y, s * 0.68f, y + s * 0.05f), s * 0.015f, s * 0.015f, p);
         }
+        return bmp;
+    }
+
+    /** Sky-blue tile with a yellow sun over a white solar panel. */
+    private Bitmap solarGlyph() {
+        int s = dp(64) * 2;
+        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setShader(new android.graphics.LinearGradient(0, 0, 0, s, 0xFF4FA8FF, 0xFF1446C8, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(new android.graphics.RadialGradient(s * 0.72f, s * 0.26f, s * 0.5f, 0x66FFE27A, 0x00FFE27A, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(null);
+        // sun, top right
+        p.setColor(0xFFFFD60A);
+        c.drawCircle(s * 0.70f, s * 0.27f, s * 0.11f, p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(s * 0.028f);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        for (int k = 0; k < 8; k++) {
+            double a = Math.PI * k / 4;
+            c.drawLine(s * 0.70f + (float) Math.cos(a) * s * 0.155f, s * 0.27f + (float) Math.sin(a) * s * 0.155f,
+                    s * 0.70f + (float) Math.cos(a) * s * 0.205f, s * 0.27f + (float) Math.sin(a) * s * 0.205f, p);
+        }
+        // tilted panel: a white frame with a 4x3 grid of cells
+        android.graphics.Path panel = new android.graphics.Path();
+        float[][] q = {{0.14f, 0.80f}, {0.30f, 0.46f}, {0.74f, 0.46f}, {0.86f, 0.80f}};
+        panel.moveTo(s * q[0][0], s * q[0][1]);
+        for (int k = 1; k < 4; k++) panel.lineTo(s * q[k][0], s * q[k][1]);
+        panel.close();
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xFF0B2A6B);
+        p.setShadowLayer(s * 0.03f, 0, s * 0.02f, 0x66000A30);
+        c.drawPath(panel, p);
+        p.clearShadowLayer();
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeJoin(Paint.Join.ROUND);
+        p.setStrokeWidth(s * 0.03f);
+        p.setColor(Color.WHITE);
+        c.drawPath(panel, p);
+        p.setStrokeWidth(s * 0.016f);
+        for (int k = 1; k < 4; k++) {                   // columns
+            float f = k / 4f;
+            c.drawLine(s * (q[0][0] + (q[3][0] - q[0][0]) * f), s * q[0][1], s * (q[1][0] + (q[2][0] - q[1][0]) * f), s * q[1][1], p);
+        }
+        for (int k = 1; k < 3; k++) {                   // rows
+            float f = k / 3f, y = s * (q[1][1] + (q[0][1] - q[1][1]) * f);
+            c.drawLine(s * (q[1][0] + (q[0][0] - q[1][0]) * f), y, s * (q[2][0] + (q[3][0] - q[2][0]) * f), y, p);
+        }
+        // stand
+        p.setStrokeWidth(s * 0.035f);
+        c.drawLine(s * 0.5f, s * 0.80f, s * 0.5f, s * 0.88f, p);
         return bmp;
     }
 
