@@ -25,10 +25,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Solar screen: animated power flow (solar, grid, home, battery around the inverter, dots running the way the power
- * goes, faster the more there is), the battery's charge and today's energy on the right, and today's solar, home use
- * and battery charge as a chart along the bottom. All drawn here; data from SolisCloud every minute (its own data
- * refreshes every 5). Back closes (handled by HomeActivity).
+ * Solar screen: an illustrated house (panels on the roof, inverter and meter on the wall, battery in front, lit
+ * windows) with PV, Load, Battery and Grid callouts, and dots running along the cables the way the power flows,
+ * faster the more there is. The arrows pick a part; the panel on the right shows it now, today, and today's curve.
+ * Data from SolisCloud every minute (its own data refreshes every 5). Back closes (handled by HomeActivity).
  */
 class SolarLayer extends View {
     private static final int SOLAR = 0xFFFFD60A, HOME = 0xFF64D2FF, GRID = 0xFFBF5AF2, BATTERY = 0xFF30D158,
@@ -125,22 +125,42 @@ class SolarLayer extends View {
         return w < 1000 ? String.format(Locale.US, "%.0f W", w) : String.format(Locale.US, "%.1f kW", w / 1000);
     }
 
+    // ------------------------------------------------------------------ remote: pick PV, Load, Battery or Grid
+
+    /** 0 PV (top left), 1 Load (top right), 2 Battery (bottom left), 3 Grid (bottom right). */
+    private int sel = 2;
+
+    @Override public boolean onKeyDown(int code, android.view.KeyEvent e) {
+        int was = sel;
+        switch (code) {
+            case android.view.KeyEvent.KEYCODE_DPAD_LEFT: sel &= ~1; break;
+            case android.view.KeyEvent.KEYCODE_DPAD_RIGHT: sel |= 1; break;
+            case android.view.KeyEvent.KEYCODE_DPAD_UP: sel &= ~2; break;
+            case android.view.KeyEvent.KEYCODE_DPAD_DOWN: sel |= 2; break;
+            case android.view.KeyEvent.KEYCODE_DPAD_CENTER:
+            case android.view.KeyEvent.KEYCODE_ENTER: sel = (sel + 1) % 4; break;
+            default: return super.onKeyDown(code, e);
+        }
+        if (sel != was) selAt = SystemClock.uptimeMillis();
+        invalidate();
+        return true;
+    }
+
+    private long selAt;
+
+    // ------------------------------------------------------------------ drawing
+
     @Override protected void onDraw(Canvas c) {
         int w = getWidth(), h = getHeight();
         long t = SystemClock.uptimeMillis();
-        // background: deep blue-black with a warm glow where the sun sits
         p.setColor(Color.WHITE);
-        p.setShader(new LinearGradient(0, 0, w, h, 0xFF101622, 0xFF050608, Shader.TileMode.CLAMP));
-        c.drawRect(0, 0, w, h, p);
-        p.setShader(new RadialGradient(w * 0.30f, px(60), w * 0.35f, 0x24FFD60A, 0x00FFD60A, Shader.TileMode.CLAMP));
+        p.setShader(new LinearGradient(0, 0, 0, h, 0xFF15171C, 0xFF050506, Shader.TileMode.CLAMP));
         c.drawRect(0, 0, w, h, p);
         p.setShader(null);
 
         drawHeader(c, w);
-        float top = px(96), bottom = h - px(196);
-        drawFlow(c, px(40), top, w * 0.54f, bottom, t);
-        drawCard(c, w * 0.56f, top, w - px(40), bottom);
-        drawChart(c, px(40), h - px(172), w - px(40), h - px(28));
+        drawScene(c, px(24), px(92), w * 0.60f, h - px(16), t);
+        drawPanel(c, w * 0.61f, px(104), w - px(40), h - px(36));
 
         if (isOpen()) postInvalidateOnAnimation();           // the flow dots move
     }
@@ -171,271 +191,406 @@ class SolarLayer extends View {
         }
         if (status.length() > 110) status = status.substring(0, 110) + "…";
         text(c, status, px(46), px(76), 13, color, false);
-        String hint = "Back: close";
+        String hint = "◀ ▶ ▲ ▼ choose   ·   Back: close";
         text(c, hint, w - px(44) - width(hint, 14, false), px(52), 14, DIM, false);
     }
 
-    // ---- power flow
+    // ------------------------------------------------------------------ the house (isometric)
 
-    private void drawFlow(Canvas c, float l, float t, float rr, float b, long time) {
-        float nr = px(34);
-        float cx = (l + rr) / 2, cy = (t + b) / 2, dx = Math.min((rr - l) / 2 - px(70), px(190)), dy = (b - t) / 2 - nr - px(2);
-        float[][] at = {{cx, cy - dy}, {cx - dx, cy}, {cx + dx, cy}, {cx, cy + dy}};   // solar, grid, home, battery
-        int[] col = {SOLAR, GRID, HOME, BATTERY};
+    // world units: x along the front of the house (left to right), y towards the viewer, z up
+    private float ox, oy, u;
+    private static final float C30 = 0.866f;
+
+    private float sx(float x, float y) { return ox + (x - y) * C30 * u; }
+    private float sy(float x, float y, float z) { return oy + ((x + y) * 0.5f - z) * u; }
+
+    private Path poly(float[]... pts) {
+        Path q = new Path();
+        for (int i = 0; i < pts.length; i++) {
+            float X = sx(pts[i][0], pts[i][1]), Y = sy(pts[i][0], pts[i][1], pts[i][2]);
+            if (i == 0) q.moveTo(X, Y); else q.lineTo(X, Y);
+        }
+        q.close();
+        return q;
+    }
+
+    private void fill(Canvas c, int color, float[]... pts) {
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(color);
+        c.drawPath(poly(pts), p);
+    }
+
+    private static float[] v(float x, float y, float z) { return new float[]{x, y, z}; }
+
+    /** A box seen from the front-right: its front (y1), right (x1) and top faces. */
+    private void box(Canvas c, float x0, float x1, float y0, float y1, float z0, float z1, int front, int side, int top) {
+        fill(c, side, v(x1, y0, z0), v(x1, y1, z0), v(x1, y1, z1), v(x1, y0, z1));
+        fill(c, front, v(x0, y1, z0), v(x1, y1, z0), v(x1, y1, z1), v(x0, y1, z1));
+        fill(c, top, v(x0, y0, z1), v(x1, y0, z1), v(x1, y1, z1), v(x0, y1, z1));
+    }
+
+    /** A lit window on the front wall (y = 6) or the right gable (x = 10). */
+    private void window(Canvas c, boolean front, float a0, float a1, float z0, float z1, float glow) {
+        Path q = front ? poly(v(a0, 6.01f, z0), v(a1, 6.01f, z0), v(a1, 6.01f, z1), v(a0, 6.01f, z1))
+                : poly(v(10.01f, a0, z0), v(10.01f, a1, z0), v(10.01f, a1, z1), v(10.01f, a0, z1));
+        float cx = front ? sx((a0 + a1) / 2, 6) : sx(10, (a0 + a1) / 2), cy = front ? sy((a0 + a1) / 2, 6, (z0 + z1) / 2) : sy(10, (a0 + a1) / 2, (z0 + z1) / 2);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(Color.WHITE);
+        p.setShader(new RadialGradient(cx, cy, u * 2.2f, (int) (0x55 * glow) << 24 | 0xFFB347, 0x00FFB347, Shader.TileMode.CLAMP));
+        c.drawCircle(cx, cy, u * 2.2f, p);
+        p.setShader(new LinearGradient(0, sy(0, 6, z1), 0, sy(0, 6, z0), 0xFFFFD58A, 0xFFC7711F, Shader.TileMode.CLAMP));
+        c.drawPath(q, p);
+        p.setShader(null);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1, u * 0.07f));
+        p.setColor(0xFF2A2522);
+        c.drawPath(q, p);
+        float m = (a0 + a1) / 2, zm = z0 + (z1 - z0) * 0.62f;          // mullions
+        if (front) {
+            c.drawLine(sx(m, 6), sy(m, 6, z0), sx(m, 6), sy(m, 6, z1), p);
+            c.drawLine(sx(a0, 6), sy(a0, 6, zm), sx(a1, 6), sy(a1, 6, zm), p);
+        } else {
+            c.drawLine(sx(10, m), sy(10, m, z0), sx(10, m), sy(10, m, z1), p);
+            c.drawLine(sx(10, a0), sy(10, a0, zm), sx(10, a1), sy(10, a1, zm), p);
+        }
+        p.setStyle(Paint.Style.FILL);
+    }
+
+    // anchors (world) the callouts point at: PV panel centre, a window (load), battery, meter
+    private static final float[][] TARGET = {{5f, 4.7f, 5.4f}, {10f, 3f, 4.85f}, {2.2f, 7.2f, 1.5f}, {8.0f, 6.15f, 1.6f}};
+
+    private void drawScene(Canvas c, float l, float t, float rr, float b, long time) {
+        // fit the scene (x-y from -6.4 to 13.5, height from -5.5 to 10.5 units) into the box
+        float wU = 19.9f * C30, hU = 16.5f;
+        u = Math.min((rr - l) / wU, (b - t) / hU) * 0.86f;
+        ox = (l + rr) / 2 - ((-6.4f + 13.5f) / 2 * C30) * u;
+        oy = (t + b) / 2 - ((-5.5f + 10.5f) / 2) * u + px(10);
         SolisCloud.Reading n = now;
-        double[] watts = n == null ? new double[4] : new double[]{n.solar, n.grid, n.home, n.battery};
-        // which way each line runs: +1 towards the inverter, -1 away from it
-        int[] dir = {1, n != null && n.grid > 0 ? 1 : -1, -1, n != null && n.battery > 0 ? -1 : 1};
+        double night = n == null ? 1 : Math.max(0, 1 - n.solar / 1500);
 
+        // ground: a soft shadow and a slab
+        p.setColor(Color.WHITE);
+        p.setShader(new RadialGradient(sx(7.5f, 4), sy(7.5f, 4, 0), u * 11, 0x66000000, 0x00000000, Shader.TileMode.CLAMP));
+        c.drawCircle(sx(7.5f, 4), sy(7.5f, 4, 0), u * 11, p);
+        p.setShader(null);
+        fill(c, 0xFF1A1B1F, v(-1, -1, 0), v(16, -1, 0), v(16, 8, 0), v(-1, 8, 0));
+        fill(c, 0xFF101114, v(-1, 8, 0), v(16, 8, 0), v(16, 8, -0.35f), v(-1, 8, -0.35f));
+        fill(c, 0xFF0C0D0F, v(16, -1, 0), v(16, 8, 0), v(16, 8, -0.35f), v(16, -1, -0.35f));
+
+        // back roof slope and chimney (seen over the ridge), then the walls
+        fill(c, 0xFF1B1C20, v(-0.3f, -0.5f, 3.8f), v(10.3f, -0.5f, 3.8f), v(10.3f, 3, 7), v(-0.3f, 3, 7));
+        box(c, 6.6f, 7.5f, 1.4f, 2.3f, 5, 8.2f, 0xFF2B2D33, 0xFF1F2125, 0xFF15161A);
+        fill(c, 0xFF1F2125, v(6.45f, 1.25f, 8.2f), v(7.65f, 1.25f, 8.2f), v(7.65f, 2.45f, 8.2f), v(6.45f, 2.45f, 8.2f));
+        fill(c, 0xFF202227, v(10, 0, 0), v(10, 6, 0), v(10, 6, 4), v(10, 3, 7), v(10, 0, 4));      // right wall and gable
+        fill(c, 0xFF2B2D33, v(0, 6, 0), v(10, 6, 0), v(10, 6, 4), v(0, 6, 4));                     // front wall
+        float g = (float) (0.55 + 0.45 * night);
+        window(c, true, 0.7f, 1.6f, 2.4f, 3.5f, g);
+        window(c, true, 2.2f, 3.1f, 2.4f, 3.5f, g);
+        window(c, true, 6.5f, 7.4f, 2.4f, 3.5f, g);
+        window(c, true, 8.0f, 8.9f, 2.4f, 3.5f, g);
+        window(c, true, 0.7f, 1.4f, 0.6f, 1.9f, g);
+        window(c, true, 6.2f, 7.1f, 0.6f, 1.9f, g);
+        window(c, false, 2.5f, 3.5f, 4.3f, 5.4f, g);
+        fill(c, 0xFF3A2A1C, v(8.7f, 6.02f, 0), v(9.6f, 6.02f, 0), v(9.6f, 6.02f, 2.1f), v(8.7f, 6.02f, 2.1f));
+        p.setColor(0xFFE0A55A);
+        c.drawCircle(sx(9.45f, 6), sy(9.45f, 6, 1.0f), Math.max(1.5f, u * 0.06f), p);
+
+        // garage annex in front of the right wall, with a ribbed roller door
+        box(c, 10, 15, 1.5f, 6, 0, 2.8f, 0xFF26282D, 0xFF1C1E22, 0xFF2E3036);
+        fill(c, 0xFF141518, v(10, 1.2f, 3.0f), v(15.3f, 1.2f, 2.8f), v(15.3f, 6.3f, 2.8f), v(10, 6.3f, 3.0f));
+        float gd0 = 11, gd1 = 14.2f;
+        fill(c, 0xFF1E2024, v(gd0, 6.01f, 0), v(gd1, 6.01f, 0), v(gd1, 6.01f, 2.2f), v(gd0, 6.01f, 2.2f));
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(1, u * 0.05f));
+        p.setColor(0xFF34373D);
+        for (float z = 0.25f; z < 2.2f; z += 0.25f) c.drawLine(sx(gd0, 6), sy(gd0, 6, z), sx(gd1, 6), sy(gd1, 6, z), p);
+        p.setStyle(Paint.Style.FILL);
+
+        // front roof slope with the solar panels
+        fill(c, 0xFF121316, v(-0.3f, 6.5f, 3.8f), v(10.3f, 6.5f, 3.8f), v(10.3f, 3, 7), v(-0.3f, 3, 7));
+        fill(c, 0xFF0D0E10, v(10.3f, 6.5f, 3.8f), v(10.3f, 6.5f, 3.55f), v(-0.3f, 6.5f, 3.55f), v(-0.3f, 6.5f, 3.8f));
+        drawPanels(c, n);
+
+        // equipment: inverter and meter on the wall, battery in front
+        box(c, 4.3f, 5.7f, 6, 6.3f, 1.2f, 2.8f, 0xFFF2F3F5, 0xFFC9CCD2, 0xFFFFFFFF);
+        p.setColor(0xFFFF9F0A);
+        c.drawCircle(sx(5.0f, 6.3f), sy(5.0f, 6.3f, 2.5f), Math.max(2, u * 0.12f), p);       // the sun badge
+        fill(c, 0xFF9AA3B0, v(4.6f, 6.31f, 1.9f), v(5.4f, 6.31f, 1.9f), v(5.4f, 6.31f, 2.2f), v(4.6f, 6.31f, 2.2f));
+        box(c, 7.6f, 8.4f, 6, 6.25f, 1.2f, 2.0f, 0xFFE9EBEE, 0xFFBFC3CA, 0xFFFFFFFF);
+        box(c, 1.6f, 2.9f, 6.4f, 7.3f, 0, 2.0f, 0xFFF4F5F7, 0xFFCDD0D6, 0xFFFFFFFF);
+        double soc = n == null || n.soc < 0 ? 0 : n.soc;                                       // charge strip
+        int bars = (int) Math.round(soc / 20);
+        for (int k = 0; k < 5; k++) {
+            float z = 0.45f + k * 0.26f;
+            fill(c, k < bars ? BATTERY : 0xFFB9BDC4, v(2.05f, 7.31f, z), v(2.45f, 7.31f, z), v(2.45f, 7.31f, z + 0.16f), v(2.05f, 7.31f, z + 0.16f));
+        }
+
+        // wires and the power running through them (dots run the way the power flows)
+        float[][] pvWire = {{5f, 6.5f, 3.6f}, {5f, 6.15f, 3.2f}, {5f, 6.15f, 2.8f}};
+        float[][] batWire = {{2.9f, 6.6f, 1.4f}, {4.3f, 6.6f, 1.4f}, {4.3f, 6.3f, 1.5f}};
+        float[][] gridWire = {{5.7f, 6.15f, 1.9f}, {7.6f, 6.15f, 1.7f}};
+        float[][] loadWire = {{5.0f, 6.15f, 1.2f}, {5.0f, 6.15f, 0.2f}};
+        double pv = n == null ? 0 : n.solar, home = n == null ? 0 : n.home, bat = n == null ? 0 : n.battery, grid = n == null ? 0 : n.grid;
+        wire(c, pvWire, pv, true, SOLAR, time);
+        wire(c, batWire, Math.abs(bat), bat < 0, BATTERY, time);           // discharging: battery -> inverter
+        wire(c, gridWire, Math.abs(grid), grid < 0, GRID, time);           // selling: inverter -> meter
+        wire(c, loadWire, home, true, HOME, time);
+        float[][] street = {{8.0f, 6.2f, 1.2f}, {8.0f, 6.6f, 0f}, {8.0f, 8.0f, 0f}};
+        wire(c, street, Math.abs(grid), grid < 0, GRID, time);
+
+        // callouts
+        float[][] label = {{l + px(28), t + px(8)}, {l + (rr - l) * 0.62f, t + px(8)}, {l + px(28), b - px(84)}, {l + (rr - l) * 0.70f, b - px(84)}};
+        String[] name = {"PV", "Load", "Battery" + (n != null && n.soc >= 0 ? String.format(Locale.US, "  %.0f%%", n.soc) : ""), "Grid"};
+        double[] val = {pv, home, bat, grid};
+        int[] col = {SOLAR, HOME, BATTERY, GRID};
+        float pulse = (float) (0.5 + 0.5 * Math.sin((time - selAt) / 260.0));
         for (int i = 0; i < 4; i++) {
-            float x = at[i][0], y = at[i][1];
-            double v = Math.abs(watts[i]);
-            boolean on = n != null && v >= 20;
-            float len = (float) Math.hypot(x - cx, y - cy), ux = (cx - x) / len, uy = (cy - y) / len;
-            float x0 = x + ux * (nr + px(6)), y0 = y + uy * (nr + px(6)), x1 = cx - ux * px(20), y1 = cy - uy * px(20);
+            boolean on = i == sel;
+            float lx = label[i][0], ly = label[i][1];
+            float tx = sx(TARGET[i][0], TARGET[i][1]), ty = sy(TARGET[i][0], TARGET[i][1], TARGET[i][2]);
+            boolean up = i >= 2;                          // bottom labels lead upwards
+            float lineTop = up ? ty : ly + px(4), lineBot = up ? ly + px(52) : ty;
+            float hy = up ? lineTop : lineBot;
             p.setStyle(Paint.Style.STROKE);
-            p.setStrokeCap(Paint.Cap.ROUND);
-            p.setStrokeWidth(px(3));
-            p.setColor(on ? (col[i] & 0x00FFFFFF) | 0x55000000 : 0x1FFFFFFF);
-            c.drawLine(x0, y0, x1, y1, p);
+            p.setStrokeWidth(px(on ? 1.6f : 1.1f));
+            p.setColor(on ? col[i] : 0x80FFFFFF);
+            p.setPathEffect(new DashPathEffect(new float[]{px(3), px(3)}, 0));
+            path.reset();
+            path.moveTo(lx - px(10), up ? lineBot : lineTop);
+            path.lineTo(lx - px(10), hy);
+            path.lineTo(tx, hy);
+            path.lineTo(tx, ty);
+            c.drawPath(path, p);
+            p.setPathEffect(null);
+            p.setStrokeWidth(px(on ? 3 : 1.6f));
+            c.drawLine(lx - px(10), ly, lx - px(10), ly + px(48), p);    // the solid bar beside the label
             p.setStyle(Paint.Style.FILL);
             if (on) {
-                float seg = (float) Math.hypot(x1 - x0, y1 - y0), gap = px(22);
-                float speed = px(30) + px(26) * (float) Math.log10(1 + v / 100);     // dp per second
-                float shift = (time * speed / 1000f) % gap;
-                for (float s = shift; s < seg; s += gap) {
-                    float f = (dir[i] > 0 ? s : seg - s) / seg;
-                    float fade = Math.min(1, Math.min(s, seg - s) / px(14));
-                    p.setColor(col[i]);
-                    p.setAlpha((int) (255 * fade));
-                    c.drawCircle(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f, px(3.6f), p);
-                }
-                p.setAlpha(255);
-            }
-        }
-        // inverter hub
-        p.setColor(0xFF1C2230);
-        c.drawCircle(cx, cy, px(20), p);
-        p.setStyle(Paint.Style.STROKE);
-        p.setStrokeWidth(px(2));
-        p.setColor(0x66FFFFFF);
-        c.drawCircle(cx, cy, px(20), p);
-        p.setStyle(Paint.Style.FILL);
-        p.setColor(0xCCFFFFFF);
-        path.reset();                                           // a small lightning bolt
-        path.moveTo(cx + px(2), cy - px(11)); path.lineTo(cx - px(6), cy + px(2)); path.lineTo(cx - px(0.5f), cy + px(2));
-        path.lineTo(cx - px(2), cy + px(11)); path.lineTo(cx + px(6), cy - px(2)); path.lineTo(cx + px(0.5f), cy - px(2)); path.close();
-        c.drawPath(path, p);
-
-        String[] name = {"Solar", n != null && n.grid < -20 ? "Selling" : n != null && n.grid > 20 ? "Buying" : "Grid", "Home",
-                n != null && n.battery > 20 ? "Charging" : n != null && n.battery < -20 ? "Discharging" : "Battery"};
-        for (int i = 0; i < 4; i++) {
-            float x = at[i][0], y = at[i][1];
-            p.setColor(Color.WHITE);
-            p.setShader(new RadialGradient(x, y, nr * 1.9f, (col[i] & 0x00FFFFFF) | 0x30000000, 0, Shader.TileMode.CLAMP));
-            c.drawCircle(x, y, nr * 1.9f, p);
-            p.setShader(null);
-            p.setColor(0xFF161B26);
-            c.drawCircle(x, y, nr, p);
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(px(2.5f));
-            p.setColor(col[i]);
-            c.drawCircle(x, y, nr, p);
-            p.setStyle(Paint.Style.FILL);
-            icon(c, i, x, y, nr * 0.55f, col[i], n);
-            String v = n == null ? "—" : power(watts[i]);
-            if (i == 0 || i == 3) {                         // top and bottom: beside the node
-                float lx = x + nr + px(16);
-                text(c, v, lx, y + px(2), 19, Color.WHITE, true);
-                text(c, name[i], lx, y + px(19), 12, DIM, false);
+                p.setColor((col[i] & 0x00FFFFFF) | ((int) (0x40 + 0x50 * pulse) << 24));
+                c.drawCircle(tx, ty, px(9) + px(5) * pulse, p);
+                p.setColor(col[i]);
+                c.drawCircle(tx, ty, px(4), p);
             } else {
-                float ty = y + nr + px(24);
-                text(c, v, x - width(v, 19, true) / 2, ty, 19, Color.WHITE, true);
-                text(c, name[i], x - width(name[i], 12, false) / 2, ty + px(17), 12, DIM, false);
+                p.setColor(0xCCFFFFFF);
+                c.drawCircle(tx, ty, px(2.5f), p);
+            }
+            // a dark plate behind the text keeps it readable over the house
+            float vw = Math.max(width(name[i], 13, false), width(power(val[i]), 24, true)) + px(14);
+            p.setColor(0xB30B0C0F);
+            c.drawRoundRect(new RectF(lx - px(6), ly - px(2), lx + vw, ly + px(52)), px(8), px(8), p);
+            text(c, name[i], lx, ly + px(15), 13, on ? col[i] : DIM, on);
+            String pw = n == null ? "—" : power(val[i]);
+            text(c, pw, lx, ly + px(44), 24, Color.WHITE, true);
+            String st = status(i, n);
+            if (!st.isEmpty()) {
+                float sw = width(st, 11, true) + px(14), sy0 = ly + px(58);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(px(1));
+                p.setColor(col[i]);
+                c.drawRoundRect(new RectF(lx - px(2), sy0, lx - px(2) + sw, sy0 + px(19)), px(5), px(5), p);
+                p.setStyle(Paint.Style.FILL);
+                text(c, st, lx + px(5), sy0 + px(14), 11, col[i], true);
             }
         }
     }
 
-    /** Sun, pylon, house, battery (filled to its charge). */
-    private void icon(Canvas c, int i, float x, float y, float s, int color, SolisCloud.Reading n) {
-        p.setColor(color);
+    private static String status(int i, SolisCloud.Reading n) {
+        if (n == null) return "";
+        switch (i) {
+            case 0: return n.solar >= 20 ? "Generating" : "";
+            case 2: return n.battery > 20 ? "Charging" : n.battery < -20 ? "Discharging" : "Standby";
+            case 3: return n.grid > 20 ? "Buying" : n.grid < -20 ? "Selling" : "";
+            default: return "";
+        }
+    }
+
+    /** 3 rows of 8 panels on the front roof slope; they glint when the sun is out. */
+    private void drawPanels(Canvas c, SolisCloud.Reading n) {
+        float sun = n == null ? 0 : (float) Math.min(1, n.solar / 4000);
+        int cols = 8, rows = 3;
+        for (int i = 0; i < cols; i++) for (int j = 0; j < rows; j++) {
+            float x0 = 0.5f + i * 1.15f, x1 = x0 + 1.05f;
+            float f0 = 0.10f + j * 0.28f, f1 = f0 + 0.25f;              // 0 at the eave, 1 at the ridge
+            float y0 = 6.5f - 3.5f * f0, z0 = 3.8f + 3.2f * f0, y1 = 6.5f - 3.5f * f1, z1 = 3.8f + 3.2f * f1;
+            Path q = poly(v(x0, y0, z0 + 0.05f), v(x1, y0, z0 + 0.05f), v(x1, y1, z1 + 0.05f), v(x0, y1, z1 + 0.05f));
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(Color.WHITE);
+            int top = blend(0xFF232833, 0xFF3B5A86, sun), bottom = blend(0xFF16191F, 0xFF1D2C46, sun);
+            p.setShader(new LinearGradient(0, sy(x0, y1, z1), 0, sy(x0, y0, z0), top, bottom, Shader.TileMode.CLAMP));
+            c.drawPath(q, p);
+            p.setShader(null);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(Math.max(1, u * 0.04f));
+            p.setColor(0xFF3A3F49);
+            c.drawPath(q, p);
+        }
+        p.setStyle(Paint.Style.FILL);
+    }
+
+    private static int blend(int a, int b, float f) {
+        int r = (int) (((a >> 16) & 0xFF) * (1 - f) + ((b >> 16) & 0xFF) * f), g = (int) (((a >> 8) & 0xFF) * (1 - f) + ((b >> 8) & 0xFF) * f),
+                bl = (int) ((a & 0xFF) * (1 - f) + (b & 0xFF) * f);
+        return 0xFF000000 | r << 16 | g << 8 | bl;
+    }
+
+    /** A cable along world points; with power flowing, glowing dots run along it (forward = in the point order). */
+    private void wire(Canvas c, float[][] pts, double watts, boolean forward, int color, long time) {
+        int m = pts.length;
+        float[] X = new float[m], Y = new float[m], len = new float[m];
+        for (int i = 0; i < m; i++) {
+            X[i] = sx(pts[i][0], pts[i][1]);
+            Y[i] = sy(pts[i][0], pts[i][1], pts[i][2]);
+            if (i > 0) len[i] = len[i - 1] + (float) Math.hypot(X[i] - X[i - 1], Y[i] - Y[i - 1]);
+        }
+        boolean on = now != null && watts >= 20;
+        p.setStyle(Paint.Style.STROKE);
         p.setStrokeCap(Paint.Cap.ROUND);
         p.setStrokeJoin(Paint.Join.ROUND);
-        if (i == 0) {
-            c.drawCircle(x, y, s * 0.42f, p);
-            p.setStrokeWidth(px(2.4f));
-            p.setStyle(Paint.Style.STROKE);
-            for (int k = 0; k < 8; k++) {
-                double a = Math.PI * k / 4;
-                c.drawLine(x + (float) Math.cos(a) * s * 0.66f, y + (float) Math.sin(a) * s * 0.66f,
-                        x + (float) Math.cos(a) * s * 0.92f, y + (float) Math.sin(a) * s * 0.92f, p);
-            }
-        } else if (i == 1) {
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(px(2.2f));
-            path.reset();
-            path.moveTo(x - s * 0.55f, y + s * 0.95f); path.lineTo(x - s * 0.12f, y - s * 0.9f); path.lineTo(x + s * 0.12f, y - s * 0.9f);
-            path.lineTo(x + s * 0.55f, y + s * 0.95f);
-            path.moveTo(x - s * 0.7f, y - s * 0.45f); path.lineTo(x + s * 0.7f, y - s * 0.45f);
-            path.moveTo(x - s * 0.5f, y + s * 0.05f); path.lineTo(x + s * 0.5f, y + s * 0.05f);
-            path.moveTo(x - s * 0.33f, y - s * 0.45f); path.lineTo(x + s * 0.4f, y + s * 0.05f);
-            path.moveTo(x + s * 0.33f, y - s * 0.45f); path.lineTo(x - s * 0.4f, y + s * 0.05f);
-            c.drawPath(path, p);
-        } else if (i == 2) {
-            path.reset();
-            path.moveTo(x, y - s * 0.85f); path.lineTo(x + s * 0.85f, y - s * 0.05f); path.lineTo(x + s * 0.62f, y - s * 0.05f);
-            path.lineTo(x + s * 0.62f, y + s * 0.8f); path.lineTo(x - s * 0.62f, y + s * 0.8f); path.lineTo(x - s * 0.62f, y - s * 0.05f);
-            path.lineTo(x - s * 0.85f, y - s * 0.05f); path.close();
-            c.drawPath(path, p);
-            p.setColor(0xFF161B26);
-            c.drawRoundRect(new RectF(x - s * 0.18f, y + s * 0.25f, x + s * 0.18f, y + s * 0.8f), s * 0.06f, s * 0.06f, p);
-        } else {
-            float bw = s * 0.95f, bh = s * 1.55f;
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(px(2.2f));
-            r.set(x - bw / 2, y - bh / 2 + s * 0.12f, x + bw / 2, y + bh / 2);
-            c.drawRoundRect(r, s * 0.12f, s * 0.12f, p);
-            p.setStyle(Paint.Style.FILL);
-            c.drawRect(x - bw * 0.2f, y - bh / 2 - s * 0.05f, x + bw * 0.2f, y - bh / 2 + s * 0.12f, p);
-            float soc = n == null || n.soc < 0 ? 0 : (float) Math.min(100, n.soc) / 100f;
-            float in = px(3.2f), ft = r.bottom - in - (r.height() - 2 * in) * soc;
-            c.drawRect(r.left + in, ft, r.right - in, r.bottom - in, p);
-        }
+        p.setStrokeWidth(Math.max(1.5f, u * 0.09f));
+        p.setColor(on ? (color & 0x00FFFFFF) | 0x80000000 : 0xFF3A3D44);
+        path.reset();
+        path.moveTo(X[0], Y[0]);
+        for (int i = 1; i < m; i++) path.lineTo(X[i], Y[i]);
+        c.drawPath(path, p);
         p.setStyle(Paint.Style.FILL);
+        if (!on) return;
+        float total = len[m - 1], gap = px(16), speed = px(24) + px(22) * (float) Math.log10(1 + watts / 100);
+        float shift = (time * speed / 1000f) % gap;
+        for (float s = shift; s < total; s += gap) {
+            float d = forward ? s : total - s;
+            int k = 1;
+            while (k < m - 1 && len[k] < d) k++;
+            float f = (d - len[k - 1]) / Math.max(1, len[k] - len[k - 1]);
+            float x = X[k - 1] + (X[k] - X[k - 1]) * f, y = Y[k - 1] + (Y[k] - Y[k - 1]) * f;
+            p.setColor((color & 0x00FFFFFF) | 0x50000000);
+            c.drawCircle(x, y, px(5), p);
+            p.setColor(color);
+            c.drawCircle(x, y, px(2.6f), p);
+        }
     }
 
-    // ---- battery and today's energy
+    // ------------------------------------------------------------------ details of the chosen part
 
-    private void drawCard(Canvas c, float l, float t, float rr, float b) {
+    private void drawPanel(Canvas c, float l, float t, float rr, float b) {
         r.set(l, t, rr, b);
-        p.setColor(0x12FFFFFF);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0x14FFFFFF);
         c.drawRoundRect(r, px(22), px(22), p);
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(px(1));
-        p.setColor(0x1AFFFFFF);
+        int[] col = {SOLAR, HOME, BATTERY, GRID};
+        p.setColor((col[sel] & 0x00FFFFFF) | 0x66000000);
         c.drawRoundRect(r, px(22), px(22), p);
         p.setStyle(Paint.Style.FILL);
         SolisCloud.Reading n = now;
+        float x = l + px(26), y = t + px(40);
+        String[] title = {"Solar panels", "Home", "Battery", "Grid"};
+        p.setColor(col[sel]);
+        c.drawCircle(x + px(5), y - px(7), px(5), p);
+        text(c, title[sel], x + px(18), y, 18, Color.WHITE, true);
 
-        // battery ring
-        float rad = Math.min(px(56), (b - t) / 2 - px(40)), cx = l + px(28) + rad, cy = (t + b) / 2 - px(14);
-        p.setStyle(Paint.Style.STROKE);
-        p.setStrokeWidth(px(11));
-        p.setStrokeCap(Paint.Cap.ROUND);
-        p.setColor(0x1FFFFFFF);
-        RectF ring = new RectF(cx - rad, cy - rad, cx + rad, cy + rad);
-        c.drawArc(ring, 0, 360, false, p);
-        double soc = n == null ? -1 : n.soc;
-        if (soc >= 0) {
-            int ringColor = soc < 20 ? RED : soc < 40 ? ORANGE : BATTERY;
-            p.setColor(Color.WHITE);
-            p.setShader(new LinearGradient(cx, cy - rad, cx, cy + rad, ringColor, (ringColor & 0x00FFFFFF) | 0x99000000, Shader.TileMode.CLAMP));
-            c.drawArc(ring, -90, (float) (360 * Math.min(100, soc) / 100), false, p);
-            p.setShader(null);
-        }
-        p.setStyle(Paint.Style.FILL);
-        String pct = soc < 0 ? "—" : String.format(Locale.US, "%.0f%%", soc);
-        text(c, pct, cx - width(pct, 30, true) / 2, cy + px(8), 30, Color.WHITE, true);
-        text(c, "Battery", cx - width("Battery", 12, false) / 2, cy + px(26), 12, DIM, false);
-        String st = n == null ? "" : n.battery > 20 ? "Charging " + power(n.battery) : n.battery < -20 ? "Discharging " + power(n.battery) : "Idle";
-        text(c, st, cx - width(st, 13, true) / 2, cy + rad + px(30), 13, n != null && n.battery > 20 ? BATTERY : n != null && n.battery < -20 ? ORANGE : DIM, true);
+        double[] val = n == null ? new double[4] : new double[]{n.solar, n.home, n.battery, n.grid};
+        String big = n == null ? "—" : power(val[sel]);
+        String sub;
+        if (n == null) sub = "";
+        else if (sel == 0) sub = n.solar >= 20 ? "Generating now" : "Not generating";
+        else if (sel == 1) sub = "Using now";
+        else if (sel == 2) sub = (n.battery > 20 ? "Charging" : n.battery < -20 ? "Discharging" : "Standby") + (n.soc >= 0 ? String.format(Locale.US, "  ·  %.0f%% full", n.soc) : "");
+        else sub = n.grid > 20 ? "Buying from the grid" : n.grid < -20 ? "Selling to the grid" : "Not using the grid";
+        text(c, big, x, y + px(58), 42, Color.WHITE, true);
+        text(c, sub, x, y + px(84), 14, DIM, false);
 
-        // today
-        float sx = cx + rad + px(32), sw = rr - px(20) - sx, colW = sw / 2;
-        text(c, "TODAY", sx, t + px(34), 12, DIM, true);
-        String[][] cells = {
-                {"Generated", n == null ? "—" : fmt(n.genToday)}, {"Used", n == null ? "—" : fmt(n.homeToday)},
-                {"Bought", n == null ? "—" : fmt(n.boughtToday)}, {"Sold", n == null ? "—" : fmt(n.soldToday)},
-                {"Charged", n == null ? "—" : fmt(n.chargedToday)}, {"Discharged", n == null ? "—" : fmt(n.dischargedToday)}};
-        int[] dot = {SOLAR, HOME, GRID, GRID, BATTERY, BATTERY};
-        float rowH = Math.min(px(52), (b - t - px(60)) / 3);
-        for (int k = 0; k < 6; k++) {
-            float x = sx + (k % 2) * colW, y = t + px(56) + (k / 2) * rowH;
-            p.setColor(dot[k]);
-            c.drawCircle(x + px(4), y + px(8), px(4), p);
-            text(c, cells[k][0], x + px(14), y + px(12), 12, DIM, false);
-            String v = cells[k][1];
-            text(c, v, x, y + px(36), 19, Color.WHITE, true);
-            if (n != null) text(c, " kWh", x + width(v, 19, true), y + px(36), 11, DIM, false);
+        if (sel == 2 && n != null && n.soc >= 0) {               // battery: a charge ring at the right
+            float rad = px(38), cx = rr - px(26) - rad, cy = y + px(40);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(px(8));
+            p.setStrokeCap(Paint.Cap.ROUND);
+            p.setColor(0x1FFFFFFF);
+            RectF ring = new RectF(cx - rad, cy - rad, cx + rad, cy + rad);
+            c.drawArc(ring, 0, 360, false, p);
+            p.setColor(n.soc < 20 ? RED : n.soc < 40 ? ORANGE : BATTERY);
+            c.drawArc(ring, -90, (float) (360 * Math.min(100, n.soc) / 100), false, p);
+            p.setStyle(Paint.Style.FILL);
+            String pc = String.format(Locale.US, "%.0f%%", n.soc);
+            text(c, pc, cx - width(pc, 18, true) / 2, cy + px(7), 18, Color.WHITE, true);
         }
+
+        // today's numbers for this part
+        String[][] cells;
+        if (n == null) cells = new String[0][];
+        else if (sel == 0) cells = new String[][]{{"Generated today", fmt(n.genToday)}, {"Peak today", peak()}};
+        else if (sel == 1) cells = new String[][]{{"Used today", fmt(n.homeToday)}, {"From solar", fmt(Math.max(0, n.homeToday - n.boughtToday - n.dischargedToday))}};
+        else if (sel == 2) cells = new String[][]{{"Charged today", fmt(n.chargedToday)}, {"Discharged today", fmt(n.dischargedToday)}};
+        else cells = new String[][]{{"Bought today", fmt(n.boughtToday)}, {"Sold today", fmt(n.soldToday)}};
+        float cy0 = y + px(112), colW = (rr - l - px(52)) / 2;
+        for (int k = 0; k < cells.length; k++) {
+            float cx = x + k * colW;
+            text(c, cells[k][0], cx, cy0 + px(14), 12, DIM, false);
+            text(c, cells[k][1], cx, cy0 + px(40), 22, Color.WHITE, true);
+            if (!cells[k][1].endsWith("W")) text(c, " kWh", cx + width(cells[k][1], 22, true), cy0 + px(40), 12, DIM, false);
+        }
+        drawChart(c, l + px(20), cy0 + px(78), rr - px(20), b - px(18));
+    }
+
+    private String peak() {
+        double m = 0;
+        for (SolisCloud.Point q : day) m = Math.max(m, q.solar);
+        return power(m);
     }
 
     private static String fmt(double kwh) { return String.format(Locale.US, kwh >= 100 ? "%.0f" : "%.1f", kwh); }
 
-    // ---- today's chart
-
+    /** Today's curve for the chosen part: solar, home use, battery % (grid: solar and home together). */
     private void drawChart(Canvas c, float l, float t, float rr, float b) {
-        text(c, "Today", l + px(4), t + px(4), 15, Color.WHITE, true);
-        float lx = l + px(64);
-        String[] leg = {"Solar", "Home", "Battery %"};
-        int[] lc = {SOLAR, HOME, BATTERY};
-        for (int k = 0; k < 3; k++) {
-            p.setColor(lc[k]);
-            c.drawRoundRect(new RectF(lx, t - px(4), lx + px(14), t + px(1)), px(2), px(2), p);
-            text(c, leg[k], lx + px(20), t + px(4), 12, DIM, false);
-            lx += px(20) + width(leg[k], 12, false) + px(22);
-        }
-        float gt = t + px(18), gb = b - px(18), gl = l + px(4), gr = rr - px(4);
-        double max = 1000;
-        for (SolisCloud.Point q : day) max = Math.max(max, Math.max(q.solar, q.home));
-        max = Math.ceil(max / 1000) * 1000;
-        // grid lines and labels
+        String[] title = {"Solar today", "Home use today", "Battery charge today", "Solar and home use today"};
+        text(c, title[sel], l + px(6), t + px(4), 13, DIM, true);
+        float gt = t + px(16), gb = b - px(18), gl = l + px(6), gr = rr - px(6);
+        boolean pct = sel == 2;
+        double max = pct ? 100 : 1000;
+        if (!pct) for (SolisCloud.Point q : day) max = Math.max(max, sel == 0 ? q.solar : sel == 1 ? q.home : Math.max(q.solar, q.home));
+        if (!pct) max = Math.ceil(max / 1000) * 1000;
         p.setStrokeWidth(px(1));
-        for (int k = 0; k <= 2; k++) {
-            float y = gt + (gb - gt) * k / 2f;
-            p.setColor(0x14FFFFFF);
-            c.drawLine(gl, y, gr, y, p);
-        }
-        String ml = power(max);
-        text(c, ml, gr - width(ml, 11, false), gt - px(4), 11, DIM, false);
-        for (int hr = 0; hr <= 24; hr += 3) {
-            float x = gl + (gr - gl) * hr / 24f;
+        p.setColor(0x14FFFFFF);
+        for (int k = 0; k <= 2; k++) { float yy = gt + (gb - gt) * k / 2f; c.drawLine(gl, yy, gr, yy, p); }
+        String ml = pct ? "100%" : power(max);
+        text(c, ml, gr - width(ml, 11, false), t + px(4), 11, DIM, false);
+        for (int hr = 0; hr <= 24; hr += 6) {
+            float xx = gl + (gr - gl) * hr / 24f;
             String s = String.format(Locale.US, "%02d", hr);
             float tw = width(s, 11, false);
-            text(c, s, Math.max(gl, Math.min(gr - tw, x - tw / 2)), b, 11, 0x80FFFFFF, false);
+            text(c, s, Math.max(gl, Math.min(gr - tw, xx - tw / 2)), b, 11, 0x80FFFFFF, false);
         }
-        if (day.size() < 2) {
-            String s = now == null ? "" : "No history yet today";
-            text(c, s, (gl + gr - width(s, 13, false)) / 2, (gt + gb) / 2 + px(4), 13, DIM, false);
-            return;
-        }
+        if (day.size() < 2) return;
         float span = gr - gl;
-        // solar: filled area
-        path.reset();
-        path.moveTo(gl + span * day.get(0).minute / 1440f, gb);
-        for (SolisCloud.Point q : day) path.lineTo(gl + span * q.minute / 1440f, gb - (gb - gt) * (float) (q.solar / max));
-        path.lineTo(gl + span * day.get(day.size() - 1).minute / 1440f, gb);
-        path.close();
-        p.setColor(Color.WHITE);
-        p.setShader(new LinearGradient(0, gt, 0, gb, 0x99FFD60A, 0x10FFD60A, Shader.TileMode.CLAMP));
-        c.drawPath(path, p);
-        p.setShader(null);
-        // home and battery %: lines
-        p.setStyle(Paint.Style.STROKE);
-        p.setStrokeJoin(Paint.Join.ROUND);
-        for (int k = 0; k < 2; k++) {
+        int[] series = sel == 3 ? new int[]{0, 1} : new int[]{sel == 2 ? 2 : sel};
+        for (int sIdx : series) {
+            int color = sIdx == 0 ? SOLAR : sIdx == 1 ? HOME : BATTERY;
             path.reset();
+            Path line = new Path();
             boolean first = true;
+            float lastX = gl;
             for (SolisCloud.Point q : day) {
-                double v = k == 0 ? q.home / max : q.soc / 100;
-                if (k == 1 && q.soc < 0) continue;
-                float x = gl + span * q.minute / 1440f, y = gb - (gb - gt) * (float) Math.min(1, v);
-                if (first) path.moveTo(x, y); else path.lineTo(x, y);
+                double vv = sIdx == 0 ? q.solar : sIdx == 1 ? q.home : q.soc;
+                if (sIdx == 2 && vv < 0) continue;
+                float xx = gl + span * q.minute / 1440f, yy = gb - (gb - gt) * (float) Math.min(1, vv / max);
+                if (first) { path.moveTo(xx, gb); path.lineTo(xx, yy); line.moveTo(xx, yy); } else { path.lineTo(xx, yy); line.lineTo(xx, yy); }
                 first = false;
+                lastX = xx;
             }
-            p.setColor(k == 0 ? HOME : BATTERY);
-            p.setStrokeWidth(px(k == 0 ? 2 : 1.6f));
-            p.setPathEffect(k == 1 ? new DashPathEffect(new float[]{px(5), px(4)}, 0) : null);
+            if (first) continue;
+            path.lineTo(lastX, gb);
+            path.close();
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(Color.WHITE);
+            p.setShader(new LinearGradient(0, gt, 0, gb, (color & 0x00FFFFFF) | 0x80000000, (color & 0x00FFFFFF) | 0x08000000, Shader.TileMode.CLAMP));
             c.drawPath(path, p);
+            p.setShader(null);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(px(2));
+            p.setStrokeJoin(Paint.Join.ROUND);
+            p.setColor(color);
+            c.drawPath(line, p);
+            p.setStyle(Paint.Style.FILL);
         }
-        p.setPathEffect(null);
-        p.setStyle(Paint.Style.FILL);
-        // now
-        SolisCloud.Point last = day.get(day.size() - 1);
-        float xn = gl + span * last.minute / 1440f;
-        p.setColor(0x66FFFFFF);
-        c.drawRect(xn - px(0.5f), gt, xn + px(0.5f), gb, p);
-        p.setColor(SOLAR);
-        c.drawCircle(xn, gb - (gb - gt) * (float) (last.solar / max), px(4), p);
     }
 }

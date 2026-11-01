@@ -141,7 +141,7 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
     ./solis-setup.sh test     # logs every field the TV reads (logcat tag Solis)
     ./solis-setup.sh demo     # made-up data, to preview the screen;  clear  removes it
 
-- `SolarLayer`: animated power flow (solar, grid, home, battery around the inverter; dots run the way the power goes,
+- `SolarLayer`: an illustrated isometric house (panels, inverter, meter, battery, lit windows) with PV / Load / Battery / Grid callouts; the arrows pick one and the right-hand panel shows it now, today and today's curve. Dots run along the cables the way the power goes,
   faster with more of it), the battery's charge ring and today's energy (generated, used, bought, sold, charged,
   discharged), and today's solar / home / battery % chart. Polls every minute; SolisCloud itself refreshes every 5.
 - `SolisCloud`: signed requests (HmacSHA1 over POST, Content-MD5, Content-Type, Date, path) to
