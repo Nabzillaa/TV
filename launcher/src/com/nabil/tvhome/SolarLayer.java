@@ -87,6 +87,7 @@ class SolarLayer extends View {
             ui.removeCallbacks(this);
             if (!isOpen()) return;
             loading = now == null;
+            busy = true;
             final int g = gen;
             final boolean wantDay = SystemClock.uptimeMillis() - lastDay > DAY_MS || day.isEmpty();
             worker.execute(() -> {
@@ -106,6 +107,9 @@ class SolarLayer extends View {
                 ui.post(() -> {
                     if (g != gen) return;
                     loading = false;
+                    busy = false;
+                    if (fe == null && spinAt > 0) doneAt = SystemClock.uptimeMillis();
+                    spinAt = 0;
                     if (fr != null) now = fr;
                     if (fd != null) { day = fd; lastDay = SystemClock.uptimeMillis(); }
                     error = fe;
@@ -131,6 +135,20 @@ class SolarLayer extends View {
     private int sel = 2;
 
     @Override public boolean onKeyDown(int code, android.view.KeyEvent e) {
+        if (onRefresh) {                                   // the Refresh button (top right) has the focus
+            switch (code) {
+                case android.view.KeyEvent.KEYCODE_DPAD_DOWN: onRefresh = false; selAt = SystemClock.uptimeMillis(); break;
+                case android.view.KeyEvent.KEYCODE_DPAD_CENTER:
+                case android.view.KeyEvent.KEYCODE_ENTER: if (e.getRepeatCount() == 0) refresh(); break;
+                case android.view.KeyEvent.KEYCODE_DPAD_LEFT:
+                case android.view.KeyEvent.KEYCODE_DPAD_RIGHT:
+                case android.view.KeyEvent.KEYCODE_DPAD_UP: break;
+                default: return super.onKeyDown(code, e);
+            }
+            invalidate();
+            return true;
+        }
+        if (code == android.view.KeyEvent.KEYCODE_DPAD_UP && sel < 2) { onRefresh = true; invalidate(); return true; }
         int was = sel;
         switch (code) {
             case android.view.KeyEvent.KEYCODE_DPAD_LEFT: sel &= ~1; break;
@@ -147,6 +165,17 @@ class SolarLayer extends View {
     }
 
     private long selAt;
+    private boolean onRefresh, busy;
+    private long spinAt, doneAt;
+
+    /** Fetch now, today's curve included (SolisCloud itself only has new data every 5 minutes). */
+    private void refresh() {
+        if (busy) return;
+        spinAt = SystemClock.uptimeMillis();
+        doneAt = 0;
+        lastDay = 0;
+        poll.run();
+    }
 
     // ------------------------------------------------------------------ drawing
 
@@ -191,8 +220,51 @@ class SolarLayer extends View {
         }
         if (status.length() > 110) status = status.substring(0, 110) + "…";
         text(c, status, px(46), px(76), 13, color, false);
-        String hint = "◀ ▶ ▲ ▼ choose   ·   Back: close";
-        text(c, hint, w - px(44) - width(hint, 14, false), px(52), 14, DIM, false);
+        float bx = drawRefresh(c, w - px(44), px(30));
+        String hint = onRefresh ? "OK: refresh   ·   ▼ back   ·   Back: close" : "◀ ▶ ▲ ▼ choose   ·   Back: close";
+        text(c, hint, bx - px(18) - width(hint, 14, false), px(52), 14, DIM, false);
+    }
+
+    /** The Refresh button with its right edge at x; returns its left edge. Spins while fetching, ticks when done. */
+    private float drawRefresh(Canvas c, float x, float y) {
+        long t = SystemClock.uptimeMillis();
+        boolean spinning = spinAt > 0, done = doneAt > 0 && t - doneAt < 2500;
+        String label = spinning ? "Refreshing…" : done ? "Updated" : "Refresh";
+        float tw = width(label, 15, true), bw = tw + px(56), h = px(34);
+        RectF b = new RectF(x - bw, y, x, y + h);
+        p.setStyle(Paint.Style.FILL);
+        if (onRefresh) {
+            p.setColor(0x40FFFFFF);
+            c.drawRoundRect(new RectF(b.left - px(4), b.top - px(4), b.right + px(4), b.bottom + px(4)), h, h, p);
+        }
+        p.setColor(onRefresh ? Color.WHITE : 0x1FFFFFFF);
+        c.drawRoundRect(b, h / 2, h / 2, p);
+        int fg = onRefresh ? 0xFF111111 : Color.WHITE;
+        float cx = b.left + px(22), cy = b.centerY(), rad = px(7);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(px(2.2f));
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setColor(done ? BATTERY : fg);
+        if (done) {                                        // a tick
+            c.drawLine(cx - rad * 0.8f, cy, cx - rad * 0.2f, cy + rad * 0.6f, p);
+            c.drawLine(cx - rad * 0.2f, cy + rad * 0.6f, cx + rad * 0.9f, cy - rad * 0.6f, p);
+        } else {                                           // a circular arrow, turning while fetching
+            float a0 = spinning ? (t - spinAt) * 0.45f % 360 : -60;
+            c.drawArc(new RectF(cx - rad, cy - rad, cx + rad, cy + rad), a0, 290, false, p);
+            double end = Math.toRadians(a0 + 290);
+            float ex = cx + rad * (float) Math.cos(end), ey = cy + rad * (float) Math.sin(end);
+            double tangent = end + Math.PI / 2;
+            p.setStyle(Paint.Style.FILL);
+            path.reset();
+            path.moveTo(ex + px(4) * (float) Math.cos(tangent), ey + px(4) * (float) Math.sin(tangent));
+            path.lineTo(ex + px(3.5f) * (float) Math.cos(end), ey + px(3.5f) * (float) Math.sin(end));
+            path.lineTo(ex - px(3.5f) * (float) Math.cos(end), ey - px(3.5f) * (float) Math.sin(end));
+            path.close();
+            c.drawPath(path, p);
+        }
+        p.setStyle(Paint.Style.FILL);
+        text(c, label, b.left + px(38), cy + px(5.5f), 15, done && !onRefresh ? BATTERY : fg, true);
+        return b.left;
     }
 
     // ------------------------------------------------------------------ the house (isometric)
