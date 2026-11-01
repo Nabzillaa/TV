@@ -59,12 +59,22 @@ final class SolisCloud {
 
     private boolean demo() { return "demo".equals(prefs.getString("sc_id", null)); }
 
+    /** Signed in like the SolisCloud website (email and the password's MD5) instead of with an API key. */
+    private boolean web() { return "web".equals(prefs.getString("sc_id", null)); }
+
+    /** The station's live fields: same names from the API's stationDetail and the website's detailMix. */
+    private JSONObject detail() throws Exception {
+        String id = prefs.getString("sc_station", "");
+        return web() ? webCall("/station/detailMix", new JSONObject().put("id", id).put("needCheckSingleInverter", false)).getJSONObject("data")
+                : call("/v1/api/stationDetail", new JSONObject().put("id", id)).getJSONObject("data");
+    }
+
     // ------------------------------------------------------------------ data
 
     /** Blocking: the station right now. */
     Reading now() throws Exception {
         if (demo()) return demoReading();
-        JSONObject d = call("/v1/api/stationDetail", new JSONObject().put("id", prefs.getString("sc_station", ""))).getJSONObject("data");
+        JSONObject d = detail();
         Reading r = new Reading();
         r.solar = watts(d, "power");
         r.home = watts(d, "familyLoadPower");
@@ -86,6 +96,7 @@ final class SolisCloud {
     /** Blocking: today's history, every 5 minutes. */
     List<Point> today() throws Exception {
         if (demo()) return demoDay();
+        if (web()) return webDay();
         String day = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
         int tz = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 3_600_000;
         JSONObject body = new JSONObject().put("id", prefs.getString("sc_station", "")).put("money", "AUD").put("time", day).put("timeZone", tz);
@@ -106,6 +117,49 @@ final class SolisCloud {
             list.add(p);
         }
         return list;
+    }
+
+    /** The website's day chart: parallel lists (times, solar, home, battery %), powers in the unit of powerStr. */
+    private List<Point> webDay() throws Exception {
+        String day = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+        int tz = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 3_600_000;
+        JSONObject d = webCall("/chart/station/day/v2", new JSONObject().put("id", prefs.getString("sc_station", ""))
+                .put("time", day).put("timeZone", tz).put("money", "AUD")).optJSONObject("data");
+        List<Point> list = new ArrayList<>();
+        if (d == null) return list;
+        JSONArray times = d.optJSONArray("timeStr") != null ? d.optJSONArray("timeStr") : d.optJSONArray("time");
+        JSONArray pv = d.optJSONArray("pvAndAcCoupledPowerList") != null ? d.optJSONArray("pvAndAcCoupledPowerList") : d.optJSONArray("power");
+        JSONArray load = d.optJSONArray("familyLoadPowerList") != null ? d.optJSONArray("familyLoadPowerList") : d.optJSONArray("totalAndSmartLoadPowerList");
+        JSONArray soc = d.optJSONArray("batteryCapacitySocList");
+        if (times == null) return list;
+        String u = d.optString("powerStr", "kW");
+        double f = u.equalsIgnoreCase("kW") ? 1000 : u.equalsIgnoreCase("MW") ? 1_000_000 : 1;
+        Calendar c = Calendar.getInstance();
+        java.util.regex.Pattern hhmm = java.util.regex.Pattern.compile("(\\d{1,2}):(\\d{2})");
+        for (int i = 0; i < times.length(); i++) {
+            Object t = times.opt(i);
+            Point p = new Point();
+            if (t instanceof Number && ((Number) t).longValue() > 100_000_000_000L) {
+                c.setTimeInMillis(((Number) t).longValue());
+                p.minute = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+            } else {
+                java.util.regex.Matcher m = hhmm.matcher(String.valueOf(t));
+                if (!m.find()) continue;
+                p.minute = Integer.parseInt(m.group(1)) * 60 + Integer.parseInt(m.group(2));
+            }
+            p.solar = num(pv, i) * f;
+            p.home = num(load, i) * f;
+            p.soc = soc == null ? -1 : num(soc, i);
+            list.add(p);
+        }
+        return list;
+    }
+
+    private static double num(JSONArray a, int i) {
+        if (a == null || i >= a.length()) return 0;
+        Object o = a.opt(i);
+        if (o instanceof JSONObject) o = ((JSONObject) o).opt("value");
+        try { return Double.parseDouble(String.valueOf(o)); } catch (NumberFormatException e) { return 0; }
     }
 
     /** Which way the battery and grid powers point: the combination that balances solar + bought = home + charging. */
@@ -185,6 +239,105 @@ final class SolisCloud {
         }
     }
 
+    // ------------------------------------------------------------------ website login (no API key)
+
+    // the key the SolisCloud website signs its own requests with ("WEB 2424"), from its public JavaScript
+    private static final String WEB_KEY = "5704383536604a8bb94c83ebc059aa8c";
+    // one session for the whole app: sign in once, again only when SolisCloud ends it (at most every 10 minutes)
+    private static String cookies, token;
+    private static long lastLogin;
+
+    private JSONObject webCall(String path, JSONObject body) throws Exception {
+        if (cookies == null && token == null) login();
+        JSONObject r = webPost(path, body);
+        if (!"0".equals(r.optString("code"))) {
+            Log.i(TAG, path + ": " + r.optString("code") + " " + r.optString("msg") + ", signing in again");
+            login();
+            r = webPost(path, body);
+            if (!"0".equals(r.optString("code"))) throw new java.io.IOException("SolisCloud: " + r.optString("code") + " " + r.optString("msg"));
+        }
+        return r;
+    }
+
+    private synchronized void login() throws Exception {
+        if (prefs.getBoolean("sc_bad", false)) throw new java.io.IOException("SolisCloud refused the password; run ./solis-setup.sh web again");
+        if (System.currentTimeMillis() - lastLogin < 10 * 60_000) throw new java.io.IOException("SolisCloud session ended; signing in again shortly");
+        lastLogin = System.currentTimeMillis();
+        cookies = null;
+        token = null;
+        JSONObject r = webPost("/user/login2", new JSONObject().put("userInfo", prefs.getString("sc_user", ""))
+                .put("passWord", prefs.getString("sc_pw", "")).put("yingZhenType", 1));
+        if (!"0".equals(r.optString("code"))) {
+            Log.w(TAG, "sign-in refused: " + r.optString("code") + " " + r.optString("msg"));
+            prefs.edit().putBoolean("sc_bad", true).apply();               // never retry a refused password
+            throw new java.io.IOException("SolisCloud refused the sign-in (" + r.optString("msg") + ")");
+        }
+        JSONObject d = r.optJSONObject("data");
+        if (d != null && d.optString("token", "").length() > 0) token = d.optString("token");
+        Log.i(TAG, "signed in to SolisCloud");
+    }
+
+    private JSONObject webPost(String path, JSONObject body) throws Exception {
+        body.put("localTime", System.currentTimeMillis())
+                .put("localTimeZone", TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 3_600_000).put("language", "en");
+        byte[] b = body.toString().getBytes(StandardCharsets.UTF_8);
+        String md5 = Base64.encodeToString(MessageDigest.getInstance("MD5").digest(b), Base64.NO_WRAP);
+        SimpleDateFormat f = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US);
+        f.setTimeZone(TimeZone.getTimeZone("GMT"));
+        String date = f.format(new Date());
+        Mac mac = Mac.getInstance("HmacSHA1");
+        mac.init(new SecretKeySpec(WEB_KEY.getBytes(StandardCharsets.UTF_8), "HmacSHA1"));
+        String sign = Base64.encodeToString(mac.doFinal(("POST\n" + md5 + "\napplication/json\n" + date + "\n" + path)
+                .getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
+        String device = prefs.getString("sc_device", null);
+        if (device == null) {
+            byte[] rnd = new byte[32];
+            new java.security.SecureRandom().nextBytes(rnd);
+            StringBuilder h = new StringBuilder();
+            for (byte x : rnd) h.append(String.format("%02x", x));
+            prefs.edit().putString("sc_device", device = h.toString()).apply();
+        }
+        HttpURLConnection c = (HttpURLConnection) new URL("https://www.soliscloud.com/api" + path).openConnection();
+        c.setConnectTimeout(10_000);
+        c.setReadTimeout(20_000);
+        c.setDoOutput(true);
+        c.setRequestProperty("Content-Type", TYPE);
+        c.setRequestProperty("Content-MD5", md5);
+        c.setRequestProperty("Time", date);
+        c.setRequestProperty("Authorization", "WEB 2424:" + sign);
+        c.setRequestProperty("language", "en");
+        c.setRequestProperty("Device-Id", device);
+        c.setRequestProperty("Version", "5.3.103");
+        c.setRequestProperty("platform", "Web");
+        c.setRequestProperty("X-Cloud-Platform", "GLY");
+        c.setRequestProperty("Origin", "https://www.soliscloud.com");
+        c.setRequestProperty("Referer", "https://www.soliscloud.com/");
+        if (cookies != null) c.setRequestProperty("Cookie", cookies);
+        if (token != null) c.setRequestProperty("token", token);
+        try (OutputStream o = c.getOutputStream()) { o.write(b); }
+        int code = c.getResponseCode();
+        java.util.List<String> set = c.getHeaderFields().get("Set-Cookie");
+        if (set != null && !set.isEmpty()) {                               // keep name=value of each cookie
+            StringBuilder jar = new StringBuilder(cookies == null ? "" : cookies);
+            for (String sc : set) {
+                String nv = sc.split(";", 2)[0].trim(), name = nv.split("=", 2)[0];
+                String cur = jar.toString().replaceAll("(^|; )" + java.util.regex.Pattern.quote(name) + "=[^;]*", "").replaceAll("^; ", "");
+                jar = new StringBuilder(cur.isEmpty() ? nv : cur + "; " + nv);
+            }
+            cookies = jar.toString();
+        }
+        try (InputStream in = code < 400 ? c.getInputStream() : c.getErrorStream()) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while (in != null && (n = in.read(buf)) > 0) out.write(buf, 0, n);
+            if (code != 200) throw new java.io.IOException("HTTP " + code);
+            return new JSONObject(out.toString("UTF-8"));
+        } finally {
+            c.disconnect();
+        }
+    }
+
     // ------------------------------------------------------------------ demo (no key yet)
 
     private static double sun(int minute) {
@@ -247,14 +400,22 @@ final class SolisCloud {
         if (v != null) {
             i.removeExtra("solis");
             SharedPreferences.Editor e = prefs.edit().remove("sc_id").remove("sc_secret").remove("sc_station").remove("sc_name")
-                    .remove("sc_sb").remove("sc_sg");
+                    .remove("sc_sb").remove("sc_sg").remove("sc_user").remove("sc_pw").remove("sc_bad");
+            cookies = null;
+            token = null;
+            lastLogin = 0;
             if (v.equals("demo")) {
                 e.putString("sc_id", "demo").putString("sc_name", "Solar (demo data)");
             } else if (!v.equals("clear")) {
                 try {
                     String[] f = new String(Base64.decode(v, Base64.DEFAULT), StandardCharsets.UTF_8).split("\\|", -1);
-                    e.putString("sc_id", f[0]).putString("sc_secret", f[1]).putString("sc_station", f[2]).putString("sc_name", f[3]);
-                    Log.i(TAG, "solar saved: " + f[3]);
+                    if (f[0].equals("web")) {               // web|email|md5(password)|stationId|name
+                        e.putString("sc_id", "web").putString("sc_user", f[1]).putString("sc_pw", f[2]).putString("sc_station", f[3]).putString("sc_name", f[4]);
+                        Log.i(TAG, "solar saved (website sign-in): " + f[4]);
+                    } else {
+                        e.putString("sc_id", f[0]).putString("sc_secret", f[1]).putString("sc_station", f[2]).putString("sc_name", f[3]);
+                        Log.i(TAG, "solar saved: " + f[3]);
+                    }
                 } catch (Exception x) {
                     Log.e(TAG, "FAILED: setup not understood");
                 }
@@ -267,7 +428,7 @@ final class SolisCloud {
                 SolisCloud s = new SolisCloud(prefs);
                 try {
                     if (!s.demo()) {
-                        JSONObject d = s.call("/v1/api/stationDetail", new JSONObject().put("id", prefs.getString("sc_station", ""))).getJSONObject("data");
+                        JSONObject d = s.detail();
                         for (Iterator<String> it = d.keys(); it.hasNext(); ) {
                             String k = it.next();
                             Object o = d.opt(k);
@@ -277,7 +438,10 @@ final class SolisCloud {
                     Reading r = s.now();
                     Log.i(TAG, String.format(Locale.US, "now: solar %.0f W, home %.0f W, battery %+.0f W (%.0f%%), grid %+.0f W; today %.1f kWh",
                             r.solar, r.home, r.battery, r.soc, r.grid, r.genToday));
-                    Log.i(TAG, "today: " + s.today().size() + " points");
+                    List<Point> day = s.today();
+                    Log.i(TAG, "today: " + day.size() + " points" + (day.isEmpty() ? "" : String.format(Locale.US,
+                            "; last %02d:%02d solar %.0f W, home %.0f W, battery %.0f%%", day.get(day.size() - 1).minute / 60,
+                            day.get(day.size() - 1).minute % 60, day.get(day.size() - 1).solar, day.get(day.size() - 1).home, day.get(day.size() - 1).soc)));
                 } catch (Exception x) {
                     Log.w(TAG, "test: " + x.getMessage());
                 }

@@ -3,6 +3,8 @@
 # Request API access once in SolisCloud (Account > Basic Settings > API Management); it gives a KeyID and a KeySecret.
 # The secret is typed hidden, checked against SolisCloud here, and sent only to the TV (it signs every request).
 #   ./solis-setup.sh            set up (asks for the KeyID and KeySecret)
+#   ./solis-setup.sh web        no API key: sign in like the SolisCloud website (asks for the email and password; the TV
+#                               keeps the email and the password's MD5, which is what the website sends)
 #   ./solis-setup.sh test       log what the TV reads from SolisCloud
 #   ./solis-setup.sh demo       show made-up data (to preview the screen)
 #   ./solis-setup.sh clear      remove the Solar screen
@@ -18,6 +20,49 @@ case "$cmd" in
     "${A[@]}" logcat -c; start "--es solis_test now"
     for _ in $(seq 1 20); do sleep 1; "${A[@]}" logcat -d -s Solis | grep -qE "today:|test:" && break; done
     "${A[@]}" logcat -d -s Solis | grep -v "^-" | cut -d: -f4- | tail -80; exit 0 ;;
+  web)
+    read -r -p "SolisCloud email: " SOLIS_USER
+    read -r -s -p "SolisCloud password (hidden): " SOLIS_PW; echo
+    export SOLIS_USER SOLIS_PW
+    OUT=$(python3 -I - <<'PY2'
+import base64, datetime, hashlib, hmac, json, os, sys, time, urllib.request, http.cookiejar
+KEY = "5704383536604a8bb94c83ebc059aa8c"          # the SolisCloud website's own request-signing key
+web = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+tok = None
+def call(path, body):
+    body = dict(body, localTime=int(time.time() * 1000), language="en",
+                localTimeZone=round(datetime.datetime.now().astimezone().utcoffset().total_seconds() / 3600))
+    b = json.dumps(body, separators=(",", ":")).encode()
+    md5 = base64.b64encode(hashlib.md5(b).digest()).decode()
+    date = datetime.datetime.now(datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    sign = base64.b64encode(hmac.new(KEY.encode(), f"POST\n{md5}\napplication/json\n{date}\n{path}".encode(), hashlib.sha1).digest()).decode()
+    h = {"Content-MD5": md5, "Authorization": "WEB 2424:" + sign, "Time": date, "Content-Type": "application/json;charset=UTF-8",
+         "language": "en", "Device-Id": os.urandom(32).hex(), "Version": "5.3.103", "platform": "Web", "X-Cloud-Platform": "GLY",
+         "Origin": "https://www.soliscloud.com", "Referer": "https://www.soliscloud.com/"}
+    if tok: h["token"] = tok
+    return json.load(web.open(urllib.request.Request("https://www.soliscloud.com/api" + path, data=b, headers=h), timeout=20))
+pw = hashlib.md5(os.environ["SOLIS_PW"].strip().encode()).hexdigest()
+user = os.environ["SOLIS_USER"].strip()
+r = call("/user/login2", {"userInfo": user, "passWord": pw, "yingZhenType": 1})          # one attempt only
+if str(r.get("code")) != "0":
+    sys.exit(f"SolisCloud refused the sign-in: {r.get('code')} {r.get('msg')}")
+tok = (r.get("data") or {}).get("token") if isinstance(r.get("data"), dict) else None
+recs = (((call("/station/listV2", {"pageNo": 1, "pageSize": 20}).get("data") or {}).get("page") or {}).get("records")) or []
+if not recs:
+    sys.exit("No plants found on this SolisCloud account.")
+s = recs[0]
+d = call("/station/detailMix", {"id": s["id"], "needCheckSingleInverter": False}).get("data") or {}
+call("/user/logout1", {})
+print(f"OK|{user}|{pw}|{s['id']}|{s.get('stationName') or 'Solar'}|{d.get('batteryPercent')}", end="")
+PY2
+)
+    unset SOLIS_PW
+    IFS='|' read -r ok user pw sid name soc <<<"$OUT"
+    [ "$ok" = "OK" ] || { echo "$OUT"; exit 1; }
+    B=$(printf 'web|%s|%s|%s|%s' "$user" "$pw" "$sid" "$name" | base64 | tr -d '\n')
+    start "--es solis '$B'"; unset B pw
+    echo "Signed in to '$name' (battery ${soc}%). Sent to the TV; open Solar in the dock."
+    exit 0 ;;
 esac
 
 read -r -p "SolisCloud API KeyID: " SOLIS_ID
