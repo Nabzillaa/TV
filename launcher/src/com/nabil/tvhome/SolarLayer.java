@@ -129,6 +129,7 @@ class SolarLayer extends View {
         int w = getWidth(), h = getHeight();
         long t = SystemClock.uptimeMillis();
         // background: deep blue-black with a warm glow where the sun sits
+        p.setColor(Color.WHITE);
         p.setShader(new LinearGradient(0, 0, w, h, 0xFF101622, 0xFF050608, Shader.TileMode.CLAMP));
         c.drawRect(0, 0, w, h, p);
         p.setShader(new RadialGradient(w * 0.30f, px(60), w * 0.35f, 0x24FFD60A, 0x00FFD60A, Shader.TileMode.CLAMP));
@@ -137,8 +138,8 @@ class SolarLayer extends View {
 
         drawHeader(c, w);
         float top = px(96), bottom = h - px(196);
-        drawFlow(c, px(40), top, w * 0.58f, bottom, t);
-        drawCard(c, w * 0.60f, top, w - px(40), bottom);
+        drawFlow(c, px(40), top, w * 0.54f, bottom, t);
+        drawCard(c, w * 0.56f, top, w - px(40), bottom);
         drawChart(c, px(40), h - px(172), w - px(40), h - px(28));
 
         if (isOpen()) postInvalidateOnAnimation();           // the flow dots move
@@ -177,8 +178,8 @@ class SolarLayer extends View {
     // ---- power flow
 
     private void drawFlow(Canvas c, float l, float t, float rr, float b, long time) {
-        float cx = (l + rr) / 2, cy = (t + b) / 2 + px(6), dx = Math.min((rr - l) / 2 - px(70), px(190)), dy = (b - t) / 2 - px(44);
         float nr = px(34);
+        float cx = (l + rr) / 2, cy = (t + b) / 2, dx = Math.min((rr - l) / 2 - px(70), px(190)), dy = (b - t) / 2 - nr - px(2);
         float[][] at = {{cx, cy - dy}, {cx - dx, cy}, {cx + dx, cy}, {cx, cy + dy}};   // solar, grid, home, battery
         int[] col = {SOLAR, GRID, HOME, BATTERY};
         SolisCloud.Reading n = now;
@@ -230,6 +231,7 @@ class SolarLayer extends View {
                 n != null && n.battery > 20 ? "Charging" : n != null && n.battery < -20 ? "Discharging" : "Battery"};
         for (int i = 0; i < 4; i++) {
             float x = at[i][0], y = at[i][1];
+            p.setColor(Color.WHITE);
             p.setShader(new RadialGradient(x, y, nr * 1.9f, (col[i] & 0x00FFFFFF) | 0x30000000, 0, Shader.TileMode.CLAMP));
             c.drawCircle(x, y, nr * 1.9f, p);
             p.setShader(null);
@@ -242,10 +244,15 @@ class SolarLayer extends View {
             p.setStyle(Paint.Style.FILL);
             icon(c, i, x, y, nr * 0.55f, col[i], n);
             String v = n == null ? "—" : power(watts[i]);
-            boolean below = i != 0;
-            float ty = below ? y + nr + px(24) : y - nr - px(30);
-            text(c, v, x - width(v, 19, true) / 2, ty, 19, Color.WHITE, true);
-            text(c, name[i], x - width(name[i], 12, false) / 2, ty + px(17), 12, DIM, false);
+            if (i == 0 || i == 3) {                         // top and bottom: beside the node
+                float lx = x + nr + px(16);
+                text(c, v, lx, y + px(2), 19, Color.WHITE, true);
+                text(c, name[i], lx, y + px(19), 12, DIM, false);
+            } else {
+                float ty = y + nr + px(24);
+                text(c, v, x - width(v, 19, true) / 2, ty, 19, Color.WHITE, true);
+                text(c, name[i], x - width(name[i], 12, false) / 2, ty + px(17), 12, DIM, false);
+            }
         }
     }
 
@@ -311,7 +318,7 @@ class SolarLayer extends View {
         SolisCloud.Reading n = now;
 
         // battery ring
-        float rad = Math.min(px(62), (b - t) / 2 - px(40)), cx = l + px(28) + rad, cy = t + px(30) + rad;
+        float rad = Math.min(px(56), (b - t) / 2 - px(40)), cx = l + px(28) + rad, cy = (t + b) / 2 - px(14);
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(px(11));
         p.setStrokeCap(Paint.Cap.ROUND);
@@ -321,6 +328,7 @@ class SolarLayer extends View {
         double soc = n == null ? -1 : n.soc;
         if (soc >= 0) {
             int ringColor = soc < 20 ? RED : soc < 40 ? ORANGE : BATTERY;
+            p.setColor(Color.WHITE);
             p.setShader(new LinearGradient(cx, cy - rad, cx, cy + rad, ringColor, (ringColor & 0x00FFFFFF) | 0x99000000, Shader.TileMode.CLAMP));
             c.drawArc(ring, -90, (float) (360 * Math.min(100, soc) / 100), false, p);
             p.setShader(null);
@@ -333,7 +341,7 @@ class SolarLayer extends View {
         text(c, st, cx - width(st, 13, true) / 2, cy + rad + px(30), 13, n != null && n.battery > 20 ? BATTERY : n != null && n.battery < -20 ? ORANGE : DIM, true);
 
         // today
-        float sx = cx + rad + px(34), sw = rr - px(24) - sx, colW = sw / 2;
+        float sx = cx + rad + px(32), sw = rr - px(20) - sx, colW = sw / 2;
         text(c, "TODAY", sx, t + px(34), 12, DIM, true);
         String[][] cells = {
                 {"Generated", n == null ? "—" : fmt(n.genToday)}, {"Used", n == null ? "—" : fmt(n.homeToday)},
@@ -347,8 +355,8 @@ class SolarLayer extends View {
             c.drawCircle(x + px(4), y + px(8), px(4), p);
             text(c, cells[k][0], x + px(14), y + px(12), 12, DIM, false);
             String v = cells[k][1];
-            text(c, v, x, y + px(36), 20, Color.WHITE, true);
-            if (n != null) text(c, " kWh", x + width(v, 20, true), y + px(36), 12, DIM, false);
+            text(c, v, x, y + px(36), 19, Color.WHITE, true);
+            if (n != null) text(c, " kWh", x + width(v, 19, true), y + px(36), 11, DIM, false);
         }
     }
 
@@ -398,6 +406,7 @@ class SolarLayer extends View {
         for (SolisCloud.Point q : day) path.lineTo(gl + span * q.minute / 1440f, gb - (gb - gt) * (float) (q.solar / max));
         path.lineTo(gl + span * day.get(day.size() - 1).minute / 1440f, gb);
         path.close();
+        p.setColor(Color.WHITE);
         p.setShader(new LinearGradient(0, gt, 0, gb, 0x99FFD60A, 0x10FFD60A, Shader.TileMode.CLAMP));
         c.drawPath(path, p);
         p.setShader(null);
