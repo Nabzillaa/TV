@@ -396,7 +396,11 @@ final class SolisCloud {
     /** --es solis <base64 "keyId|secret|stationId|name"> | demo | clear;  --es solis_test now (logs the raw fields) */
     static boolean handle(SharedPreferences prefs, Intent i) {
         if (i == null) return false;
-        String v = i.getStringExtra("solis"), test = i.getStringExtra("solis_test");
+        String v = i.getStringExtra("solis"), test = i.getStringExtra("solis_test"), sky = i.getStringExtra("solar_sky");
+        if (sky != null) {                                  // preview the Solar scene's sky: "weather code,hour" or clear
+            i.removeExtra("solar_sky");
+            if (sky.equals("clear")) prefs.edit().remove("sc_sky").apply(); else prefs.edit().putString("sc_sky", sky).apply();
+        }
         if (v != null) {
             i.removeExtra("solis");
             SharedPreferences.Editor e = prefs.edit().remove("sc_id").remove("sc_secret").remove("sc_station").remove("sc_name")

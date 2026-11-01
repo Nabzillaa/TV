@@ -203,7 +203,7 @@ public class HomeActivity extends Activity {
         garageLayer = new GarageLayer(this, ui, garage, prefs);
         root.addView(garageLayer, new FrameLayout.LayoutParams(-1, -1));
         solis = new SolisCloud(prefs);
-        solarLayer = new SolarLayer(this, ui, solis);
+        solarLayer = new SolarLayer(this, ui, solis, prefs);
         root.addView(solarLayer, new FrameLayout.LayoutParams(-1, -1));
 
         matrix = new MatrixView(this);

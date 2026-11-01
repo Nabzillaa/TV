@@ -144,6 +144,14 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
 - `SolarLayer`: an illustrated isometric house (panels, inverter, meter, battery, lit windows) with PV / Load / Battery / Grid callouts; the arrows pick one and the right-hand panel shows it now, today and today's curve. Dots run along the cables the way the power goes,
   faster with more of it), the battery's charge ring and today's energy (generated, used, bought, sold, charged,
   discharged), and today's solar / home / battery % chart. Polls every minute; SolisCloud itself refreshes every 5.
+- The scene is a diorama of the house (red brick, tiled roof with framed panels, white panelled garage door, lawn,
+  driveway, shrubs, trees) under the real sky: the sun's position comes from the time, date and the weather location
+  (wx_lat/wx_lon), giving day, dusk and night (stars, moon, lit windows, light on the lawn), and the home screen's
+  Open-Meteo weather adds drifting clouds, rain, snow, fog or a thunderstorm. Walls are lit by the sun's side and cast
+  shadows. Preview any sky with `--es solar_sky "<weather code>,<hour>"` (`clear` to stop).
+- Drawing: the sky, house and leader lines are one opaque image, redrawn only when the light, the sun's place, the data
+  or the selection change; each frame (30 fps) adds just the clouds, the power dots, rain and the label plates. The
+  animation clock wraps hourly (uptime in ms is too large for float positions). Background apps slow it: Clean up helps.
 - `SolisCloud`: signed requests (HmacSHA1 over POST, Content-MD5, Content-Type, Date, path) to
   `/v1/api/stationDetail` and `/v1/api/stationDay`. Battery and grid directions are learnt from the energy balance
   (solar + bought = home + charging + sold) and kept in prefs `sc_sb`/`sc_sg`, as their signs vary by firmware.
