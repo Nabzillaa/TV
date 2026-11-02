@@ -615,15 +615,18 @@ class SolarLayer extends android.widget.FrameLayout {
     private static float[] v(float x, float y, float z) { return new float[]{x, y, z}; }
 
     // anchors (world) the callouts point at: PV panel centre, a window (load), battery, meter
-    private static final float[][] TARGET = {{5f, 4.7f, 5.4f}, {10f, 3f, 4.85f}, {2.2f, 7.2f, 1.5f}, {8.0f, 6.15f, 1.6f}};
+    /** How much taller the walls are than a plain single storey: lifts the roof so the panel cable shows. */
+    private static final float RISE = 1.0f;
+
+    private static final float[][] TARGET = {{5f, 4.7f, 5.4f + RISE}, {10f, 3f, 4.85f + RISE}, {2.2f, 7.2f, 1.5f}, {8.0f, 6.15f, 1.6f}};
 
     private void drawScene(Canvas c, float l, float t, float rr, float b, long time) {
         Outside o = outside();
         // fit the scene (x-y from -7 to 17.5, height from -5.5 to 13) into the box
-        float wU = 24.5f * C30, hU = 18.5f;
+        float wU = 24.5f * C30, hU = 18.5f + RISE;
         u = Math.min((rr - l) / wU, (b - t) / hU) * 0.80f;
         ox = (l + rr) / 2 - ((-7f + 17.5f) / 2 * C30) * u;
-        oy = (t + b) / 2 - ((-5.5f + 13f) / 2) * u + px(44);
+        oy = (t + b) / 2 - ((-5.5f - RISE + 13f) / 2) * u + px(44);
 
         RectF card = new RectF(l, t, rr, b);
         SolisCloud.Reading n = now;
@@ -653,7 +656,8 @@ class SolarLayer extends android.widget.FrameLayout {
         drawClouds(c, l, t, rr, b, o, time);
 
         // cables, with dots running the way the power flows
-        float[][] pvWire = {{5f, 6.5f, 3.6f}, {5f, 6.15f, 3.2f}, {5f, 6.15f, 2.8f}};
+        // from the bottom row of panels, down the roof, round the eave and down the wall into the inverter
+        float[][] pvWire = {{5f, 6.15f, 4.18f + RISE}, {5f, 6.55f, 3.78f + RISE}, {5f, 6.2f, 3.4f + RISE}, {5f, 6.15f, 2.8f}};
         float[][] batWire = {{2.9f, 6.6f, 1.4f}, {4.3f, 6.6f, 1.4f}, {4.3f, 6.3f, 1.5f}};
         float[][] gridWire = {{5.7f, 6.15f, 1.9f}, {7.6f, 6.15f, 1.7f}};
         float[][] loadWire = {{5.0f, 6.15f, 1.2f}, {5.0f, 6.15f, 0.2f}};
@@ -930,7 +934,7 @@ class SolarLayer extends android.widget.FrameLayout {
     // the service line: from the meter up the wall to the eave, then sagging across to the power pole's crossarm
     private static final float[][] SERVICE_LINE;
     static {
-        float[] eave = {8.0f, 6.35f, 3.45f}, pole = {16.3f, 9.3f, 6.15f};
+        float[] eave = {8.0f, 6.35f, 3.45f + RISE}, pole = {16.3f, 9.3f, 6.15f};
         SERVICE_LINE = new float[11][];
         SERVICE_LINE[0] = new float[]{8.0f, 6.22f, 2.0f};
         for (int k = 0; k <= 9; k++) {
@@ -991,27 +995,27 @@ class SolarLayer extends android.widget.FrameLayout {
         if (sunny > 0.05f) {
             float len = (float) Math.min(2.2, 1 / Math.tan(Math.toRadians(Math.max(8, o.alt))));
             float dx = (0.5f - o.frac) * 2.2f * len, dy = -0.9f * len;                        // sun left (morning) -> shadow right
-            shadow(c, 0, 10, 0, 6, 4, 7, dx, dy, sunny);
+            shadow(c, 0, 10, 0, 6, 4 + RISE, 7 + RISE, dx, dy, sunny);
             shadow(c, 10, 15, 1.5f, 6, 2.9f, 2.9f, dx, dy, sunny);
         }
         tree(c, 15.6f, -0.6f, 1.3f, o);
 
         // back roof slope and chimney, seen over the ridge
         int roofBack = lit(ROOF, 0.78f, o);
-        fill(c, roofBack, v(-0.3f, -0.5f, 3.8f), v(10.3f, -0.5f, 3.8f), v(10.3f, 3, 7), v(-0.3f, 3, 7));
+        fill(c, roofBack, v(-0.3f, -0.5f, 3.8f + RISE), v(10.3f, -0.5f, 3.8f + RISE), v(10.3f, 3, 7 + RISE), v(-0.3f, 3, 7 + RISE));
         tiles(c, roofBack, false);
-        brickBox(c, 6.6f, 7.5f, 1.4f, 2.3f, 5, 8.2f, o, front, side);
-        fill(c, lit(0xFF6B6E73, 0.9f, o), v(6.45f, 1.25f, 8.2f), v(7.65f, 1.25f, 8.2f), v(7.65f, 2.45f, 8.2f), v(6.45f, 2.45f, 8.2f));
+        brickBox(c, 6.6f, 7.5f, 1.4f, 2.3f, 5 + RISE, 8.2f + RISE, o, front, side);
+        fill(c, lit(0xFF6B6E73, 0.9f, o), v(6.45f, 1.25f, 8.2f + RISE), v(7.65f, 1.25f, 8.2f + RISE), v(7.65f, 2.45f, 8.2f + RISE), v(6.45f, 2.45f, 8.2f + RISE));
 
         // walls
-        Path right = poly(v(10, 0, 0), v(10, 6, 0), v(10, 6, 4), v(10, 3, 7), v(10, 0, 4));
-        Path wall = poly(v(0, 6, 0), v(10, 6, 0), v(10, 6, 4), v(0, 6, 4));
+        Path right = poly(v(10, 0, 0), v(10, 6, 0), v(10, 6, 4 + RISE), v(10, 3, 7 + RISE), v(10, 0, 4 + RISE));
+        Path wall = poly(v(0, 6, 0), v(10, 6, 0), v(10, 6, 4 + RISE), v(0, 6, 4 + RISE));
         p.setColor(lit(BRICK, side, o));
         c.drawPath(right, p);
-        bricks(c, right, false, 10, 0, 6, 0, 7, lit(BRICK, side, o));
+        bricks(c, right, false, 10, 0, 6, 0, 7 + RISE, lit(BRICK, side, o));
         p.setColor(lit(BRICK, front, o));
         c.drawPath(wall, p);
-        bricks(c, wall, true, 6, 0, 10, 0, 4, lit(BRICK, front, o));
+        bricks(c, wall, true, 6, 0, 10, 0, 4 + RISE, lit(BRICK, front, o));
         // contact shadow where the walls meet the lawn
         p.setColor(Color.WHITE);
         p.setShader(new LinearGradient(0, sy(0, 6, 0), 0, sy(0, 6, 0.6f), 0x40000000, 0x00000000, Shader.TileMode.CLAMP));
@@ -1025,7 +1029,7 @@ class SolarLayer extends android.widget.FrameLayout {
         window(c, true, 8.0f, 8.9f, 2.4f, 3.5f, glow, o);
         window(c, true, 0.7f, 1.4f, 0.6f, 1.9f, glow, o);
         window(c, true, 6.2f, 7.1f, 0.6f, 1.9f, glow, o);
-        window(c, false, 2.5f, 3.5f, 4.3f, 5.4f, glow * 0.7f, o);
+        window(c, false, 2.5f, 3.5f, 4.3f + RISE, 5.4f + RISE, glow * 0.7f, o);
         // front door: timber with a frosted side light and a porch light
         fill(c, lit(TRIM, front, o), v(8.6f, 6.02f, 0), v(9.7f, 6.02f, 0), v(9.7f, 6.02f, 2.25f), v(8.6f, 6.02f, 2.25f));
         fill(c, lit(0xFF6B4226, front, o), v(8.7f, 6.03f, 0), v(9.35f, 6.03f, 0), v(9.35f, 6.03f, 2.15f), v(8.7f, 6.03f, 2.15f));
@@ -1067,20 +1071,20 @@ class SolarLayer extends android.widget.FrameLayout {
 
         // front roof slope: tiles, fascia and gutter, then the panels
         int roofFront = lit(ROOF, 0.98f, o);
-        fill(c, roofFront, v(-0.3f, 6.5f, 3.8f), v(10.3f, 6.5f, 3.8f), v(10.3f, 3, 7), v(-0.3f, 3, 7));
+        fill(c, roofFront, v(-0.3f, 6.5f, 3.8f + RISE), v(10.3f, 6.5f, 3.8f + RISE), v(10.3f, 3, 7 + RISE), v(-0.3f, 3, 7 + RISE));
         tiles(c, roofFront, true);
-        fill(c, lit(TRIM, front * 0.95f, o), v(10.3f, 6.5f, 3.8f), v(10.3f, 6.5f, 3.52f), v(-0.3f, 6.5f, 3.52f), v(-0.3f, 6.5f, 3.8f));
-        fill(c, lit(TRIM, side * 0.9f, o), v(10.3f, 6.5f, 3.8f), v(10.3f, 3, 7), v(10.3f, 3, 6.75f), v(10.3f, 6.5f, 3.52f));     // barge board
+        fill(c, lit(TRIM, front * 0.95f, o), v(10.3f, 6.5f, 3.8f + RISE), v(10.3f, 6.5f, 3.52f + RISE), v(-0.3f, 6.5f, 3.52f + RISE), v(-0.3f, 6.5f, 3.8f + RISE));
+        fill(c, lit(TRIM, side * 0.9f, o), v(10.3f, 6.5f, 3.8f + RISE), v(10.3f, 3, 7 + RISE), v(10.3f, 3, 6.75f + RISE), v(10.3f, 6.5f, 3.52f + RISE));     // barge board
         // ridge capping, gutter and downpipes
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeCap(Paint.Cap.BUTT);
         p.setStrokeWidth(Math.max(2, u * 0.16f));
         p.setColor(lit(0xFF5A5D63, 1.05f, o));
-        c.drawLine(sx(-0.3f, 3), sy(-0.3f, 3, 7.02f), sx(10.3f, 3), sy(10.3f, 3, 7.02f), p);
+        c.drawLine(sx(-0.3f, 3), sy(-0.3f, 3, 7.02f + RISE), sx(10.3f, 3), sy(10.3f, 3, 7.02f + RISE), p);
         p.setStrokeWidth(Math.max(1.5f, u * 0.1f));
         p.setColor(lit(0xFFDADAD5, front, o));
-        c.drawLine(sx(-0.3f, 6.55f), sy(-0.3f, 6.55f, 3.5f), sx(10.3f, 6.55f), sy(10.3f, 6.55f, 3.5f), p);
-        for (float dx : new float[]{-0.15f, 10.15f}) c.drawLine(sx(dx, 6.55f), sy(dx, 6.55f, 3.5f), sx(dx, 6.55f), sy(dx, 6.55f, 0.05f), p);
+        c.drawLine(sx(-0.3f, 6.55f), sy(-0.3f, 6.55f, 3.5f + RISE), sx(10.3f, 6.55f), sy(10.3f, 6.55f, 3.5f + RISE), p);
+        for (float dx : new float[]{-0.15f, 10.15f}) c.drawLine(sx(dx, 6.55f), sy(dx, 6.55f, 3.5f + RISE), sx(dx, 6.55f), sy(dx, 6.55f, 0.05f), p);
         p.setStrokeCap(Paint.Cap.ROUND);
         p.setStyle(Paint.Style.FILL);
         drawPanels(c, sun, o);
@@ -1203,7 +1207,7 @@ class SolarLayer extends android.widget.FrameLayout {
         p.setStrokeWidth(Math.max(0.8f, u * 0.03f));
         p.setColor(mix(base, 0xFF000000, 0.35f));
         for (float f = 0.08f; f < 1; f += 0.09f) {
-            float y = front ? 6.5f - 3.5f * f : -0.5f + 3.5f * f, z = 3.8f + 3.2f * f;
+            float y = front ? 6.5f - 3.5f * f : -0.5f + 3.5f * f, z = 3.8f + RISE + 3.2f * f;
             c.drawLine(sx(-0.3f, y), sy(-0.3f, y, z), sx(10.3f, y), sy(10.3f, y, z), p);
         }
         p.setStyle(Paint.Style.FILL);
@@ -1255,7 +1259,7 @@ class SolarLayer extends android.widget.FrameLayout {
         for (int i = 0; i < cols; i++) for (int j = 0; j < rows; j++) {
             float x0 = 0.5f + i * 1.15f, x1 = x0 + 1.05f;
             float f0 = 0.10f + j * 0.28f, f1 = f0 + 0.25f;              // 0 at the eave, 1 at the ridge
-            float y0 = 6.5f - 3.5f * f0, z0 = 3.8f + 3.2f * f0, y1 = 6.5f - 3.5f * f1, z1 = 3.8f + 3.2f * f1;
+            float y0 = 6.5f - 3.5f * f0, z0 = 3.8f + RISE + 3.2f * f0, y1 = 6.5f - 3.5f * f1, z1 = 3.8f + RISE + 3.2f * f1;
             Path q = poly(v(x0, y0, z0 + 0.06f), v(x1, y0, z0 + 0.06f), v(x1, y1, z1 + 0.06f), v(x0, y1, z1 + 0.06f));
             p.setStyle(Paint.Style.FILL);
             p.setColor(Color.WHITE);
