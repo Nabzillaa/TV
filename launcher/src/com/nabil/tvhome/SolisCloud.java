@@ -44,6 +44,14 @@ final class SolisCloud {
         double genToday, homeToday, boughtToday, soldToday, chargedToday, dischargedToday;
         long time;                         // when the inverter reported it
         boolean demo;
+        // more from the station and the inverter (NaN when not reported); energies in kWh
+        double capacityKw = Double.NaN, peakSunHours = Double.NaN, co2t = Double.NaN, trees = Double.NaN, days = Double.NaN;
+        double monthGen = Double.NaN, monthSold = Double.NaN, monthBought = Double.NaN, monthHome = Double.NaN, totalGen = Double.NaN;
+        double ydaySold = Double.NaN, ydayBought = Double.NaN, ydayHome = Double.NaN;
+        double pv1W = Double.NaN, pv1V = Double.NaN, pv1A = Double.NaN, pv2W = Double.NaN, pv2V = Double.NaN, pv2A = Double.NaN;
+        double invTemp = Double.NaN, acKw = Double.NaN, dcBus = Double.NaN, hz = Double.NaN, v1 = Double.NaN, v2 = Double.NaN, v3 = Double.NaN;
+        double soh = Double.NaN, batV = Double.NaN;
+        String sunrise = "", sunset = "", since = "";
     }
 
     /** One point of today's history: minutes since midnight, solar W, home W, battery %. */
@@ -87,10 +95,45 @@ final class SolisCloud {
         r.chargedToday = kwh(d, "batteryChargeEnergy");
         r.dischargedToday = kwh(d, "batteryDischargeEnergy");
         r.time = d.optLong("dataTimestamp", System.currentTimeMillis());
+        r.capacityKw = d.optDouble("capacity", Double.NaN);
+        r.peakSunHours = d.optDouble("fullHour", Double.NaN);
+        r.co2t = d.optDouble("powerStationAvoidedCo2", Double.NaN);
+        r.trees = d.optDouble("powerStationNumTree", Double.NaN);
+        r.days = d.optDouble("generateDays", Double.NaN);
+        r.sunrise = d.optString("sr", "");
+        r.sunset = d.optString("ss", "");
+        r.since = d.optString("fisGenerateTimeStr", "");
+        r.totalGen = d.has("allEnergy") ? kwh(d, "allEnergy") : Double.NaN;
+        r.monthGen = d.has("monthEnergy") ? kwh(d, "monthEnergy") : Double.NaN;
+        try { inverter(r, d.optString("inverterId", "")); } catch (Exception e) { Log.w(TAG, "inverter: " + e.getMessage()); }
         int[] sign = signs(r.solar, r.home, b, g);
         r.battery = sign[0] * b;
         r.grid = sign[1] * g;
         return r;
+    }
+
+    /** The inverter's own readings: panel strings, temperature, grid voltages and frequency, battery health, and its
+     *  month / yesterday totals. Same field names from the API's inverterDetail and the website's inverter detail. */
+    private void inverter(Reading r, String id) throws Exception {
+        if (id.isEmpty()) return;
+        JSONObject v = (web() ? webCall("/inverter/detail", new JSONObject().put("id", id))
+                : call("/v1/api/inverterDetail", new JSONObject().put("id", id))).optJSONObject("data");
+        if (v == null) return;
+        r.pv1W = watts(v, "pow1"); r.pv1V = v.optDouble("uPv1", Double.NaN); r.pv1A = v.optDouble("iPv1", Double.NaN);
+        r.pv2W = watts(v, "pow2"); r.pv2V = v.optDouble("uPv2", Double.NaN); r.pv2A = v.optDouble("iPv2", Double.NaN);
+        r.invTemp = v.optDouble("inverterTemperature", Double.NaN);
+        r.acKw = v.has("pac") ? watts(v, "pac") / 1000 : Double.NaN;
+        r.dcBus = v.optDouble("dcBus", Double.NaN);
+        r.hz = v.optDouble("fac", Double.NaN);
+        r.v1 = v.optDouble("uAc1", Double.NaN); r.v2 = v.optDouble("uAc2", Double.NaN); r.v3 = v.optDouble("uAc3", Double.NaN);
+        r.soh = v.optDouble("batteryHealthSoh", Double.NaN);
+        r.batV = v.optDouble("batteryVoltage", Double.NaN);
+        if (v.has("gridSellMonthEnergy")) r.monthSold = kwh(v, "gridSellMonthEnergy");
+        if (v.has("gridPurchasedMonthEnergy")) r.monthBought = kwh(v, "gridPurchasedMonthEnergy");
+        if (v.has("homeLoadMonthEnergy")) r.monthHome = kwh(v, "homeLoadMonthEnergy");
+        if (v.has("gridSellYesterdayEnergy")) r.ydaySold = kwh(v, "gridSellYesterdayEnergy");
+        if (v.has("gridPurchasedYesterdayEnergy")) r.ydayBought = kwh(v, "gridPurchasedYesterdayEnergy");
+        if (v.has("homeLoadYesterdayEnergy")) r.ydayHome = kwh(v, "homeLoadYesterdayEnergy");
     }
 
     /** Blocking: today's history, every 5 minutes. */
@@ -129,11 +172,13 @@ final class SolisCloud {
         if (d == null) return list;
         JSONArray times = d.optJSONArray("timeStr") != null ? d.optJSONArray("timeStr") : d.optJSONArray("time");
         JSONArray pv = d.optJSONArray("pvAndAcCoupledPowerList") != null ? d.optJSONArray("pvAndAcCoupledPowerList") : d.optJSONArray("power");
-        JSONArray load = d.optJSONArray("familyLoadPowerList") != null ? d.optJSONArray("familyLoadPowerList") : d.optJSONArray("totalAndSmartLoadPowerList");
+        JSONArray load = d.optJSONArray("familyLoadPowerList") != null ? d.optJSONArray("familyLoadPowerList")
+                : d.optJSONArray("consumeEnergy") != null ? d.optJSONArray("consumeEnergy") : d.optJSONArray("totalAndSmartLoadPowerList");
         JSONArray soc = d.optJSONArray("batteryCapacitySocList");
         if (times == null) return list;
-        String u = d.optString("powerStr", "kW");
-        double f = u.equalsIgnoreCase("kW") ? 1000 : u.equalsIgnoreCase("MW") ? 1_000_000 : 1;
+        // the lists times powerPec are in powerStr's unit (e.g. W x 0.001 = kW); turn them into W
+        String u = d.optString("powerStr", "W");
+        double f = d.optDouble("powerPec", 1) * (u.equalsIgnoreCase("kW") ? 1000 : u.equalsIgnoreCase("MW") ? 1_000_000 : 1);
         Calendar c = Calendar.getInstance();
         java.util.regex.Pattern hhmm = java.util.regex.Pattern.compile("(\\d{1,2}):(\\d{2})");
         for (int i = 0; i < times.length(); i++) {
@@ -437,6 +482,18 @@ final class SolisCloud {
                             String k = it.next();
                             Object o = d.opt(k);
                             if (!(o instanceof JSONObject) && !(o instanceof JSONArray)) Log.i(TAG, "  " + k + " = " + o);
+                        }
+                    }
+                    if (s.web()) {                                   // the inverter's own fields (names only + numbers)
+                        JSONObject d0 = s.detail();
+                        String inv = d0.optString("inverterId", "");
+                        JSONObject id = s.webCall("/inverter/detail", new JSONObject().put("id", inv)).optJSONObject("data");
+                        if (id != null) for (Iterator<String> it = id.keys(); it.hasNext(); ) {
+                            String k = it.next();
+                            Object o = id.opt(k);
+                            if ((o instanceof Number || (o instanceof String && ((String) o).length() < 12)) && !k.toLowerCase(Locale.US).contains("sn")
+                                    && !k.toLowerCase(Locale.US).contains("phone") && !k.toLowerCase(Locale.US).contains("mail"))
+                                Log.i(TAG, "  inv." + k + " = " + o);
                         }
                     }
                     Reading r = s.now();

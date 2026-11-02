@@ -161,6 +161,12 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
 - Remote: top row PV, Money, Load; bottom row Battery, Grid; Up from the top row reaches Refresh. The details panel
   slides in on each change and the chosen label pops. The scene also has a power pole with the overhead service line
   (grid arrows run along it), a car on the driveway, gutters, downpipes, ridge capping and a letterbox.
+- More data: each part's panel shows four facts (PV: today, peak and both panel strings' V/A/kW; Home: today, from
+  solar and battery, yesterday, this month; Battery: charged, discharged, health (SOH), voltage; Grid: bought, sold,
+  3-phase voltages, frequency), and a strip along the bottom shows self-powered %, this month, yesterday, the
+  inverter's temperature and output, lifetime generation with CO₂ avoided, and sunset. They come from the station
+  detail plus the inverter's detail (`/inverter/detail` on the website, `/v1/api/inverterDetail` with a key).
+- The website's day chart lists are W × `powerPec` in `powerStr` units; home use is `consumeEnergy`.
 - `SolisCloud`: signed requests (HmacSHA1 over POST, Content-MD5, Content-Type, Date, path) to
   `/v1/api/stationDetail` and `/v1/api/stationDay`. Battery and grid directions are learnt from the energy balance
   (solar + bought = home + charging + sold) and kept in prefs `sc_sb`/`sc_sg`, as their signs vary by firmware.

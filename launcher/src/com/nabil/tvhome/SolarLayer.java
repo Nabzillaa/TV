@@ -98,7 +98,7 @@ class SolarLayer extends android.widget.FrameLayout {
     @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
         super.onLayout(changed, l, t, r, b);
         int w = r - l, h = b - t;
-        scene.layout(Math.round(px(24)), Math.round(px(92)), Math.round(w * 0.60f), Math.round(h - px(16)));
+        scene.layout(Math.round(px(24)), Math.round(px(92)), Math.round(w * 0.60f), Math.round(h - px(112)));
     }
 
     /** New data or a new selection: both the panel and the scene change. */
@@ -250,7 +250,8 @@ class SolarLayer extends android.widget.FrameLayout {
 
         drawHeader(c, w);
         float k = Math.min(1, (t - selAt) / 260f), e = 1 - (1 - k) * (1 - k) * (1 - k);     // ease out
-        RectF pr = new RectF(w * 0.61f, px(104), w - px(40), h - px(36));
+        RectF pr = new RectF(w * 0.61f, px(92), w - px(40), h - px(112));
+        drawInfo(c, px(24), h - px(100), w - px(40), h - px(14));
         int save = k < 1 ? c.saveLayerAlpha(pr.left - px(40), pr.top - px(4), pr.right + px(40), pr.bottom + px(4), (int) (255 * (0.25f + 0.75f * e)))
                 : c.save();
         c.translate((1 - e) * px(28), 0);
@@ -850,7 +851,7 @@ class SolarLayer extends android.widget.FrameLayout {
         text(c, String.format(Locale.US, "earned today  ·  %s kWh sent at ~%.1fc", fmt(n.soldToday), cash[2]), x, y + px(84), 14, DIM, false);
 
         // live prices, coloured by Amber's level
-        float cy = y + px(108);
+        float cy = y + px(96);
         if (m != null && !Double.isNaN(m.buyNow)) {
             String a = String.format(Locale.US, "Buy now %.1fc", m.buyNow), s2 = String.format(Locale.US, "Sell now %.1fc", m.sellNow);
             chip(c, a, x, cy, levelColor(m.levelNow));
@@ -864,13 +865,13 @@ class SolarLayer extends android.widget.FrameLayout {
                 {"This month earned", m != null && !Double.isNaN(m.monthEarned) ? dollars(m.monthEarned) : "—"},
                 {"This month spent", m != null && !Double.isNaN(m.monthSpent) ? dollars(m.monthSpent) : "—"}};
         for (int k = 0; k < 4; k++) {
-            float cx = x + (k % 2) * colW, ry = cy + px(36) + (k / 2) * px(50);
+            float cx = x + (k % 2) * colW, ry = cy + px(32) + (k / 2) * px(44);
             text(c, cells[k][0], cx, ry + px(12), 12, DIM, false);
             int vc = k == 1 ? (cash[0] - cash[1] >= 0 ? MONEY : ORANGE) : k == 2 ? MONEY : Color.WHITE;
             text(c, cells[k][1], cx, ry + px(36), 21, vc, true);
         }
-        if (m != null && !m.monthTo.isEmpty()) text(c, "Month from Amber's billing, to " + m.monthTo, x, cy + px(150), 11, 0x80FFFFFF, false);
-        drawPriceChart(c, l + px(20), cy + px(166), rr - px(20), b - px(18), m);
+        if (m != null && !m.monthTo.isEmpty()) text(c, "Month from Amber's billing, to " + m.monthTo, x, cy + px(134), 11, 0x80FFFFFF, false);
+        drawPriceChart(c, l + px(20), cy + px(144), rr - px(20), b - px(14), m);
     }
 
     private void chip(Canvas c, String s, float x, float y, int color) {
@@ -1464,21 +1465,80 @@ class SolarLayer extends android.widget.FrameLayout {
             text(c, pc, cx - width(pc, 18, true) / 2, cy + px(7), 18, Color.WHITE, true);
         }
 
-        // today's numbers for this part
+        // four facts about this part, 2 x 2
         String[][] cells;
         if (n == null) cells = new String[0][];
-        else if (sel == 0) cells = new String[][]{{"Generated today", fmt(n.genToday)}, {"Peak today", peak()}};
-        else if (sel == 1) cells = new String[][]{{"Used today", fmt(n.homeToday)}, {"From solar", fmt(Math.max(0, n.homeToday - n.boughtToday - n.dischargedToday))}};
-        else if (sel == 2) cells = new String[][]{{"Charged today", fmt(n.chargedToday)}, {"Discharged today", fmt(n.dischargedToday)}};
-        else cells = new String[][]{{"Bought today", fmt(n.boughtToday)}, {"Sold today", fmt(n.soldToday)}};
-        float cy0 = y + px(112), colW = (rr - l - px(52)) / 2;
+        else if (sel == 0) cells = new String[][]{{"Generated today", kw(n.genToday)}, {"Peak today", peak()},
+                {"String 1" + vi(n.pv1V, n.pv1A), power0(n.pv1W)}, {"String 2" + vi(n.pv2V, n.pv2A), power0(n.pv2W)}};
+        else if (sel == 1) cells = new String[][]{{"Used today", kw(n.homeToday)}, {"From solar & battery", kw(Math.max(0, n.homeToday - n.boughtToday))},
+                {"Yesterday", kw(n.ydayHome)}, {"This month", kw(n.monthHome)}};
+        else if (sel == 2) cells = new String[][]{{"Charged today", kw(n.chargedToday)}, {"Discharged today", kw(n.dischargedToday)},
+                {"Health", Double.isNaN(n.soh) ? "—" : String.format(Locale.US, "%.0f%%", n.soh)}, {"Voltage", Double.isNaN(n.batV) ? "—" : String.format(Locale.US, "%.0f V", n.batV)}};
+        else cells = new String[][]{{"Bought today", kw(n.boughtToday)}, {"Sold today", kw(n.soldToday)},
+                {"Voltage, 3 phases (V)", Double.isNaN(n.v1) ? "—" : String.format(Locale.US, "%.0f/%.0f/%.0f", n.v1, n.v2, n.v3)},
+                {"Frequency", Double.isNaN(n.hz) ? "—" : String.format(Locale.US, "%.2f Hz", n.hz)}};
+        float cy0 = y + px(104), colW = (rr - l - px(52)) / 2;
         for (int k = 0; k < cells.length; k++) {
-            float cx = x + k * colW;
-            text(c, cells[k][0], cx, cy0 + px(14), 12, DIM, false);
-            text(c, cells[k][1], cx, cy0 + px(40), 22, Color.WHITE, true);
-            if (!cells[k][1].endsWith("W")) text(c, " kWh", cx + width(cells[k][1], 22, true), cy0 + px(40), 12, DIM, false);
+            float cx = x + (k % 2) * colW, ry = cy0 + (k / 2) * px(46);
+            text(c, cells[k][0], cx, ry + px(12), 12, DIM, false);
+            String vv = cells[k][1];
+            boolean energy = vv.endsWith(" kWh") || vv.endsWith(" MWh");
+            String num = energy ? vv.substring(0, vv.lastIndexOf(' ')) : vv;
+            num = fit(num, 20, true, colW - px(12));
+            text(c, num, cx, ry + px(35), 20, Color.WHITE, true);
+            if (energy) text(c, vv.substring(vv.lastIndexOf(' ')), cx + width(num, 20, true), ry + px(35), 11, DIM, false);
         }
-        drawChart(c, l + px(20), cy0 + px(78), rr - px(20), b - px(18));
+        drawChart(c, l + px(20), cy0 + px(100), rr - px(20), b - px(14));
+    }
+
+    /** Energy in kWh, or MWh once it's big; a dash when not reported. */
+    private static String kw(double kwh) {
+        if (Double.isNaN(kwh)) return "—";
+        return kwh >= 1000 ? String.format(Locale.US, "%.2f MWh", kwh / 1000) : fmt(kwh) + " kWh";
+    }
+
+    private static String power0(double w) { return Double.isNaN(w) ? "—" : power(w); }
+
+    private static String vi(double v, double a) { return Double.isNaN(v) ? "" : String.format(Locale.US, "  %.0f V · %.1f A", v, a); }
+
+    /** The strip of facts along the bottom: self-powered, this month, yesterday, inverter, lifetime, CO2, sun. */
+    private void drawInfo(Canvas c, float l, float t, float rr, float b) {
+        SolisCloud.Reading n = now;
+        String[][] tiles;
+        int[] col = {BATTERY, SOLAR, HOME, ORANGE, 0xFF8BD17C, 0xFFFFC94D};
+        if (n == null || n.demo) return;
+        double self = n.homeToday > 0 ? Math.max(0, Math.min(1, 1 - n.boughtToday / n.homeToday)) * 100 : Double.NaN;
+        tiles = new String[][]{
+                {"Self-powered", Double.isNaN(self) ? "—" : String.format(Locale.US, "%.0f%%", self), "of home use today"},
+                {"Made this month", kw(n.monthGen), "sold " + num(n.monthSold) + " · bought " + num(n.monthBought)},
+                {"Used yesterday", kw(n.ydayHome), "sold " + num(n.ydaySold) + " · bought " + num(n.ydayBought)},
+                {"Inverter", Double.isNaN(n.invTemp) ? "—" : String.format(Locale.US, "%.1f °C", n.invTemp),
+                        Double.isNaN(n.acKw) ? "" : String.format(Locale.US, "putting out %.2f kW", n.acKw)},
+                {"Made since installed", kw(n.totalGen), Double.isNaN(n.co2t) ? "" : String.format(Locale.US, "%.1f t of CO₂ avoided", n.co2t)},
+                {"Sunset", n.sunset.isEmpty() ? "—" : n.sunset,
+                        (n.sunrise.isEmpty() ? "" : "rose " + n.sunrise) + (Double.isNaN(n.peakSunHours) ? "" : String.format(Locale.US, " · %.1f sun h", n.peakSunHours))}};
+        float gap = px(10), tw = (rr - l - gap * (tiles.length - 1)) / tiles.length;
+        for (int i = 0; i < tiles.length; i++) {
+            float x = l + i * (tw + gap);
+            r.set(x, t, x + tw, b);
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(0x12FFFFFF);
+            c.drawRoundRect(r, px(14), px(14), p);
+            p.setColor(col[i]);
+            c.drawRoundRect(new RectF(x + px(12), t + px(14), x + px(15), t + px(28)), px(1.5f), px(1.5f), p);
+            text(c, tiles[i][0], x + px(21), t + px(26), 12, DIM, false);
+            text(c, fit(tiles[i][1], 19, true, tw - px(24)), x + px(12), t + px(54), 19, Color.WHITE, true);
+            text(c, fit(tiles[i][2], 11, false, tw - px(24)), x + px(12), t + px(74), 11, 0x99FFFFFF, false);
+        }
+    }
+
+    private static String num(double kwh) { return Double.isNaN(kwh) ? "—" : fmt(kwh); }
+
+    /** Shorten text with an ellipsis to fit a width. */
+    private String fit(String s, float sp, boolean bold, float max) {
+        if (width(s, sp, bold) <= max) return s;
+        while (s.length() > 1 && width(s + "…", sp, bold) > max) s = s.substring(0, s.length() - 1);
+        return s + "…";
     }
 
     private String peak() {
