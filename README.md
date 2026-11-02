@@ -150,7 +150,7 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
   Open-Meteo weather adds drifting clouds, rain, snow, fog or a thunderstorm. Walls are lit by the sun's side and cast
   shadows. Preview any sky with `--es solar_sky "<weather code>,<hour>"` (`clear` to stop).
 - Drawing: the sky, house and leader lines are one opaque image, redrawn only when the light, the sun's place, the data
-  or the selection change; each frame (30 fps) adds just the clouds, the power dots, rain and the label plates. The
+  or the selection change; each frame (30 fps) adds just the clouds, the moving arrows on the cables, rain and the label plates. The
   animation clock wraps hourly (uptime in ms is too large for float positions). Background apps slow it: Clean up helps.
 - `SolisCloud`: signed requests (HmacSHA1 over POST, Content-MD5, Content-Type, Date, path) to
   `/v1/api/stationDetail` and `/v1/api/stationDay`. Battery and grid directions are learnt from the energy balance

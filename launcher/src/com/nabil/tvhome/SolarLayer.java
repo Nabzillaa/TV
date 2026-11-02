@@ -1084,19 +1084,33 @@ class SolarLayer extends android.widget.FrameLayout {
         c.drawPath(path, p);
         p.setStyle(Paint.Style.FILL);
         if (!on) return;
-        float total = len[m - 1], gap = px(16), speed = px(24) + px(22) * (float) Math.log10(1 + watts / 100);
-        float shift = (float) ((time * (double) speed / 1000) % gap);
+        // arrowheads (chevrons) pointing the way the power flows, moving along the cable; one path per cable
+        float total = len[m - 1], gap = px(15), speed = px(24) + px(22) * (float) Math.log10(1 + watts / 100);
+        float shift = (float) ((time * (double) speed / 1000) % gap), a = px(3.4f);
+        Path arrows = new Path();
         for (float s = shift; s < total; s += gap) {
             float d = forward ? s : total - s;
             int k = 1;
             while (k < m - 1 && len[k] < d) k++;
-            float f = (d - len[k - 1]) / Math.max(1, len[k] - len[k - 1]);
+            float sl = Math.max(1, len[k] - len[k - 1]), f = (d - len[k - 1]) / sl;
             float x = X[k - 1] + (X[k] - X[k - 1]) * f, y = Y[k - 1] + (Y[k] - Y[k - 1]) * f;
-            p.setColor((color & 0x00FFFFFF) | 0x50000000);
-            c.drawCircle(x, y, px(5), p);
-            p.setColor(color);
-            c.drawCircle(x, y, px(2.6f), p);
+            float ux = (X[k] - X[k - 1]) / sl, uy = (Y[k] - Y[k - 1]) / sl;          // along the cable
+            if (!forward) { ux = -ux; uy = -uy; }
+            float tipX = x + ux * a * 0.6f, tipY = y + uy * a * 0.6f;                // > shape: tip ahead, wings behind
+            arrows.moveTo(tipX - ux * a - uy * a * 0.8f, tipY - uy * a + ux * a * 0.8f);
+            arrows.lineTo(tipX, tipY);
+            arrows.lineTo(tipX - ux * a + uy * a * 0.8f, tipY - uy * a - ux * a * 0.8f);
         }
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStrokeJoin(Paint.Join.ROUND);
+        p.setStrokeWidth(px(3.6f));
+        p.setColor((color & 0x00FFFFFF) | 0x45000000);                                  // soft glow
+        c.drawPath(arrows, p);
+        p.setStrokeWidth(px(1.6f));
+        p.setColor(color);
+        c.drawPath(arrows, p);
+        p.setStyle(Paint.Style.FILL);
     }
 
     // ------------------------------------------------------------------ details of the chosen part
