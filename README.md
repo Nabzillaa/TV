@@ -158,7 +158,7 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
   Without Amber it estimates at 5c sell / 30c buy. Token: Amber app > Settings > Amber for Developers, then
   `./amber-setup.sh` (`test`, `clear`). `AmberClient` (api.amber.com.au/v1; feed-in prices are what you pay, so
   negative means earned). Prefs `am_token`, `am_site`.
-- Remote: top row PV, Money, Load; bottom row Battery, Grid; below them Months; Up from the top row reaches Refresh. The details panel
+- Remote: top row PV, Money, Load; bottom row Battery, Grid; below them the strip's tiles; Up from the top row reaches Refresh. The details panel
   slides in on each change and the chosen label pops. The scene also has a power pole with the overhead service line
   (grid arrows run along it), a car on the driveway, gutters, downpipes, ridge capping and a letterbox.
 - More data: each part's panel shows four facts (PV: today, peak and both panel strings' V/A/kW; Home: today, from
@@ -166,11 +166,21 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
   3-phase voltages, frequency), and a strip along the bottom shows self-powered %, this month, yesterday, the
   inverter's temperature and output, lifetime generation with CO₂ avoided, and sunset. They come from the station
   detail plus the inverter's detail (`/inverter/detail` on the website, `/v1/api/inverterDetail` with a key).
-- Months (▼ from Battery or Grid; the "Made this month" tile is ringed): this month so far against the three before,
-  as kWh a day made and used (bars, so a part month compares fairly) and totals made, used, sold, bought,
-  self-powered % and ≈ earned at 5c. From the year chart: `/chart/station/year` on the website (body `year`, the
-  station's own `timeZone` and `money` from its detail, `version: 1`; `time` gives a "Communication error"),
-  `/v1/api/stationYear` with a key. Fetched hourly.
+- The strip's six tiles each open a panel (▼ from Battery or Grid, then ◀ ▶; ▲ back up; the chosen tile is ringed):
+  1 Self-powered: where today's home energy came from (panels, battery, grid) and where the panels' went (home,
+    battery, grid), and self-powered % today, yesterday and the last months.
+  2 Months: this month so far against the three before, as kWh a day made and used (bars, so a part month compares
+    fairly) and totals made, used, sold, bought, self-powered % and ≈ earned at 5c.
+  3 Days: the last two weeks made / used as bars, and yesterday against the day before and the 7-day average.
+  4 Inverter: temperature, both strings, DC-to-AC efficiency, DC bus, grid frequency and phases, today's output.
+  5 Since installed: made, used, sold, bought, battery in / out and round trip, ≈ earned and saved, CO₂.
+  6 Sun: sunrise, sunset, daylight, and the next days' sunshine (Open-Meteo, at the home screen's location) with the
+    solar it should bring: forecast sunlight (MJ/m² ÷ 3.6) × panel kW × a factor learnt each evening from what the
+    panels actually made (prefs `sun_pr`, `sun_pr_day`).
+  Charts from the website (body: the station's own `timeZone` and `money` from its detail, `version: 1`; the period
+  is `month` / `year`, not `time`, which gives a "Communication error"): `/chart/station/month` (days),
+  `/chart/station/year` (months), `/chart/station/all` (years); with a key `/v1/api/stationMonth`, `stationYear`,
+  `stationAll`. Fetched hourly.
 - The website's day chart lists are W × `powerPec` in `powerStr` units; home use is `consumeEnergy`.
 - `SolisCloud`: signed requests (HmacSHA1 over POST, Content-MD5, Content-Type, Date, path) to
   `/v1/api/stationDetail` and `/v1/api/stationDay`. Battery and grid directions are learnt from the energy balance

@@ -55,6 +55,9 @@ class SolarLayer extends android.widget.FrameLayout {
     private List<SolisCloud.Point> day = new ArrayList<>();
     private List<SolisCloud.Month> months = new ArrayList<>();   // this month first, then the three before
     private long monthsAt;
+    private List<SolisCloud.Month> days = new ArrayList<>();       // daily totals, newest first
+    private SolisCloud.Month life;                                 // since the system started
+    private List<Forecast> forecast = new ArrayList<>();           // Open-Meteo, today and the next three days
     private String error;
     private long lastDay;
     private boolean loading;
@@ -144,7 +147,9 @@ class SolarLayer extends android.widget.FrameLayout {
                 String err = null;
                 AmberClient.Money mo = null;
                 String aerr = null;
-                List<SolisCloud.Month> mos = null;
+                List<SolisCloud.Month> mos = null, dys = null;
+                SolisCloud.Month lf = null;
+                List<Forecast> fc = null;
                 if (amber.configured() && (wantDay || SystemClock.uptimeMillis() - amberAt > 5 * 60_000)) {
                     try { mo = amber.fetch(); } catch (Exception e) { aerr = e.getMessage(); Log.w("Amber", "poll: " + aerr); }
                 }
@@ -155,6 +160,9 @@ class SolarLayer extends android.widget.FrameLayout {
                     if (wantDay) d = solis.today();
                     if (wantDay && (months.isEmpty() || SystemClock.uptimeMillis() - monthsAt > 3_600_000L)) {
                         try { mos = solis.months(); } catch (Exception e) { Log.w("Solis", "months: " + e.getMessage()); }
+                        try { dys = solis.days(); } catch (Exception e) { Log.w("Solis", "days: " + e.getMessage()); }
+                        try { lf = solis.lifetime(); } catch (Exception e) { Log.w("Solis", "lifetime: " + e.getMessage()); }
+                        try { fc = forecast(); } catch (Exception e) { Log.w("Solis", "forecast: " + e.getMessage()); }
                     }
                 } catch (Exception e) {
                     err = e.getMessage();
@@ -163,7 +171,9 @@ class SolarLayer extends android.widget.FrameLayout {
                 final SolisCloud.Reading fr = r;
                 final List<SolisCloud.Point> fd = d;
                 final String fe = err;
-                final List<SolisCloud.Month> fmos = mos;
+                final List<SolisCloud.Month> fmos = mos, fdys = dys;
+                final SolisCloud.Month flf = lf;
+                final List<Forecast> ffc = fc;
                 ui.post(() -> {
                     if (g != gen) return;
                     loading = false;
@@ -173,6 +183,10 @@ class SolarLayer extends android.widget.FrameLayout {
                     if (fr != null) now = fr;
                     if (fd != null) { day = fd; lastDay = SystemClock.uptimeMillis(); }
                     if (fmos != null && !fmos.isEmpty()) { months = fmos; monthsAt = SystemClock.uptimeMillis(); }
+                    if (fdys != null && !fdys.isEmpty()) days = fdys;
+                    if (flf != null) life = flf;
+                    if (ffc != null && !ffc.isEmpty()) forecast = ffc;
+                    calibrate();
                     error = fe;
                     if (fmo != null) { money = fmo; amberAt = SystemClock.uptimeMillis(); amberError = null; }
                     else if (faerr != null) amberError = faerr;
@@ -195,7 +209,7 @@ class SolarLayer extends android.widget.FrameLayout {
     // ------------------------------------------------------------------ remote: pick PV, Load, Battery or Grid
 
     /** 0 PV (top left), 1 Load (top right), 2 Battery (bottom left), 3 Grid (bottom right), 4 Money (top middle),
-     *  5 Months (the strip along the bottom). */
+     *  5 - 10 the strip's tiles along the bottom: Self-powered, Months, Days, Inverter, Lifetime, Sun. */
     private int sel = 2;
 
     @Override public boolean onKeyDown(int code, android.view.KeyEvent e) {
@@ -214,20 +228,32 @@ class SolarLayer extends android.widget.FrameLayout {
         }
         if (code == android.view.KeyEvent.KEYCODE_DPAD_UP && (sel < 2 || sel == 4)) { onRefresh = true; redraw(); return true; }
         int was = sel;
-        // top row: PV, Money, Load; bottom row: Battery, Grid; below them the strip (Months)
-        //                 PV  Load Battery Grid Money Months
-        int[] left  =     {0,  4,   2,      2,   0,    5};
-        int[] right =     {4,  1,   3,      3,   1,    5};
-        int[] up    =     {0,  1,   0,      1,   4,    2};
-        int[] down  =     {2,  3,   5,      5,   3,    5};
-        switch (code) {
-            case android.view.KeyEvent.KEYCODE_DPAD_LEFT: sel = left[sel]; break;
-            case android.view.KeyEvent.KEYCODE_DPAD_RIGHT: sel = right[sel]; break;
-            case android.view.KeyEvent.KEYCODE_DPAD_UP: sel = up[sel]; break;
-            case android.view.KeyEvent.KEYCODE_DPAD_DOWN: sel = down[sel]; break;
-            case android.view.KeyEvent.KEYCODE_DPAD_CENTER:
-            case android.view.KeyEvent.KEYCODE_ENTER: sel = new int[]{4, 2, 3, 5, 1, 0}[sel]; break;   // PV, Money, Load, Battery, Grid, Months
-            default: return super.onKeyDown(code, e);
+        if (sel >= 5) {                                    // on the strip: ◀ ▶ walk its tiles, ▲ goes back up
+            switch (code) {
+                case android.view.KeyEvent.KEYCODE_DPAD_LEFT: sel = Math.max(5, sel - 1); break;
+                case android.view.KeyEvent.KEYCODE_DPAD_RIGHT: sel = Math.min(10, sel + 1); break;
+                case android.view.KeyEvent.KEYCODE_DPAD_UP: strip = sel; sel = sel <= 6 ? 2 : 3; break;
+                case android.view.KeyEvent.KEYCODE_DPAD_DOWN: break;
+                case android.view.KeyEvent.KEYCODE_DPAD_CENTER:
+                case android.view.KeyEvent.KEYCODE_ENTER: sel = sel == 10 ? 0 : sel + 1; break;
+                default: return super.onKeyDown(code, e);
+            }
+        } else {
+            // top row: PV, Money, Load; bottom row: Battery, Grid; below them the strip
+            //                 PV  Load Battery Grid Money
+            int[] left  =     {0,  4,   2,      2,   0};
+            int[] right =     {4,  1,   3,      3,   1};
+            int[] up    =     {0,  1,   0,      1,   4};
+            int[] down  =     {2,  3,   -1,     -1,  3};
+            switch (code) {
+                case android.view.KeyEvent.KEYCODE_DPAD_LEFT: sel = left[sel]; break;
+                case android.view.KeyEvent.KEYCODE_DPAD_RIGHT: sel = right[sel]; break;
+                case android.view.KeyEvent.KEYCODE_DPAD_UP: sel = up[sel]; break;
+                case android.view.KeyEvent.KEYCODE_DPAD_DOWN: sel = down[sel] >= 0 ? down[sel] : strip > 0 ? strip : sel == 2 ? 5 : 8; break;
+                case android.view.KeyEvent.KEYCODE_DPAD_CENTER:
+                case android.view.KeyEvent.KEYCODE_ENTER: sel = new int[]{4, 2, 3, 5, 1}[sel]; break;   // PV, Money, Load, Battery, Grid, strip
+                default: return super.onKeyDown(code, e);
+            }
         }
         if (sel != was) selAt = SystemClock.uptimeMillis();
         redraw();
@@ -235,6 +261,7 @@ class SolarLayer extends android.widget.FrameLayout {
     }
 
     private long selAt;
+    private int strip;                                     // the strip tile last chosen (0: none yet)
     private boolean onRefresh, busy;
     private long spinAt, doneAt;
 
@@ -266,7 +293,12 @@ class SolarLayer extends android.widget.FrameLayout {
                 : c.save();
         c.translate((1 - e) * px(28), 0);
         if (sel == 4) drawMoneyPanel(c, pr.left, pr.top, pr.right, pr.bottom);
-        else if (sel == 5) drawMonthsPanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        else if (sel == 5) drawSelfPanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        else if (sel == 6) drawMonthsPanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        else if (sel == 7) drawDaysPanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        else if (sel == 8) drawInverterPanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        else if (sel == 9) drawLifePanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        else if (sel == 10) drawSunPanel(c, pr.left, pr.top, pr.right, pr.bottom);
         else drawPanel(c, pr.left, pr.top, pr.right, pr.bottom);
         c.restoreToCount(save);
         if (k < 1) back.postInvalidateOnAnimation();
@@ -304,7 +336,7 @@ class SolarLayer extends android.widget.FrameLayout {
         if (status.length() > 130) status = status.substring(0, 130) + "…";
         text(c, status, px(46), px(76), 13, color, false);
         float bx = drawRefresh(c, w - px(44), px(30));
-        String hint = onRefresh ? "OK: refresh   ·   ▼ back   ·   Back: close" : "◀ ▶ ▲ ▼ choose   ·   ▼▼ months   ·   Back: close";
+        String hint = onRefresh ? "OK: refresh   ·   ▼ back   ·   Back: close" : sel >= 5 ? "◀ ▶ the tiles   ·   ▲ back up   ·   Back: close" : "◀ ▶ ▲ ▼ choose   ·   ▼ the tiles below   ·   Back: close";
         text(c, hint, bx - px(18) - width(hint, 14, false), px(52), 14, DIM, false);
     }
 
@@ -1441,6 +1473,329 @@ class SolarLayer extends android.widget.FrameLayout {
         out[3] = (Y[k] - Y[k - 1]) / sl;
     }
 
+    // ------------------------------------------------------------------ the strip's tiles, each with a panel
+
+    /** The panel's card, its dot and title, and which of the six tiles it is. Returns the text's left and first line. */
+    private float[] frame(Canvas c, float l, float t, float rr, float b, int color, String title, int tile) {
+        r.set(l, t, rr, b);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0x14FFFFFF);
+        c.drawRoundRect(r, px(22), px(22), p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(px(1));
+        p.setColor((color & 0x00FFFFFF) | 0x66000000);
+        c.drawRoundRect(r, px(22), px(22), p);
+        p.setStyle(Paint.Style.FILL);
+        float x = l + px(26), y = t + px(40);
+        p.setColor(color);
+        c.drawCircle(x + px(5), y - px(7), px(5), p);
+        text(c, title, x + px(18), y, 18, Color.WHITE, true);
+        String k = tile + " / 6";
+        text(c, k, rr - px(22) - width(k, 11, false), y, 11, 0x66FFFFFF, false);
+        return new float[]{x, y};
+    }
+
+    private void headline(Canvas c, float x, float y, float max, String big, String sub) {
+        text(c, fit(big, 24, true, max), x, y + px(36), 24, Color.WHITE, true);
+        text(c, fit(sub, 12, false, max), x, y + px(56), 12, DIM, false);
+    }
+
+    /** A labelled bar split into coloured parts, with a legend of the parts' kWh under it. */
+    private void stack(Canvas c, float x, float y, float w, String label, double[] v, int[] col, String[] name) {
+        text(c, label, x, y, 12, DIM, false);
+        double sum = 0;
+        for (double d : v) sum += Math.max(0, d);
+        float bx = x, by = y + px(8), bh = px(10);
+        p.setColor(0x14FFFFFF);
+        c.drawRoundRect(new RectF(x, by, x + w, by + bh), px(5), px(5), p);
+        if (sum > 0) {
+            int save = c.save();
+            path.reset();
+            path.addRoundRect(new RectF(x, by, x + w, by + bh), px(5), px(5), Path.Direction.CW);
+            c.clipPath(path);
+            for (int i = 0; i < v.length; i++) {
+                float bw = (float) (w * Math.max(0, v[i]) / sum);
+                p.setColor(col[i]);
+                c.drawRect(bx, by, bx + bw, by + bh, p);
+                bx += bw;
+            }
+            c.restoreToCount(save);
+        }
+        float lx = x;
+        for (int i = 0; i < v.length; i++) {
+            String sv = name[i] + " " + fmt(Math.max(0, v[i])) + (sum > 0 ? String.format(Locale.US, " (%.0f%%)", 100 * Math.max(0, v[i]) / sum) : "");
+            p.setColor(col[i]);
+            c.drawCircle(lx + px(3), y + px(30), px(3), p);
+            text(c, sv, lx + px(10), y + px(34), 11, 0xCCFFFFFF, false);
+            lx += width(sv, 11, false) + px(22);
+        }
+    }
+
+    /** Facts in two columns: a dim label over a value (kWh / MWh units drawn small). */
+    private void facts(Canvas c, float x, float y0, float colW, float rowH, String[][] cells, float sp) {
+        for (int k = 0; k < cells.length; k++) {
+            float cx = x + (k % 2) * colW, ry = y0 + (k / 2) * rowH;
+            text(c, fit(cells[k][0], 11, false, colW - px(10)), cx, ry + px(12), 11, DIM, false);
+            String vv = cells[k][1];
+            boolean energy = vv.endsWith(" kWh") || vv.endsWith(" MWh");
+            String num = energy ? vv.substring(0, vv.lastIndexOf(' ')) : vv;
+            num = fit(num, sp, true, colW - px(30));
+            int color = cells[k].length > 2 ? Integer.parseInt(cells[k][2]) : Color.WHITE;
+            text(c, num, cx, ry + px(14) + px(sp), sp, color, true);
+            if (energy) text(c, vv.substring(vv.lastIndexOf(' ')), cx + width(num, sp, true), ry + px(14) + px(sp), 11, DIM, false);
+        }
+    }
+
+    private static double selfPct(double home, double bought) {
+        return home > 0 ? Math.max(0, Math.min(1, 1 - bought / home)) * 100 : Double.NaN;
+    }
+
+    private static String pct(double v) { return Double.isNaN(v) ? "—" : String.format(Locale.US, "%.0f%%", v); }
+
+    /** 1: where today's home energy came from and where the panels' went, and self-powered against other days. */
+    private void drawSelfPanel(Canvas c, float l, float t, float rr, float b) {
+        float[] o = frame(c, l, t, rr, b, BATTERY, "Self-powered", 1);
+        float x = o[0], y = o[1], w = rr - l - px(52);
+        SolisCloud.Reading n = now;
+        if (n == null || n.demo) { text(c, "Waiting for SolisCloud…", x, y + px(40), 15, DIM, false); return; }
+        double self = selfPct(n.homeToday, n.boughtToday);
+        headline(c, x, y, w, pct(self), "of today's home use came from your sun and battery");
+        double fromBat = Math.max(0, Math.min(n.dischargedToday, n.homeToday - n.boughtToday));
+        double direct = Math.max(0, n.homeToday - n.boughtToday - fromBat);
+        stack(c, x, y + px(86), w, "Home used " + kw(n.homeToday) + ", from", new double[]{direct, fromBat, n.boughtToday},
+                new int[]{SOLAR, BATTERY, GRID}, new String[]{"panels", "battery", "grid"});
+        stack(c, x, y + px(142), w, "Panels made " + kw(n.genToday) + ", went to", new double[]{direct, n.chargedToday, n.soldToday},
+                new int[]{HOME, BATTERY, GRID}, new String[]{"home", "battery", "grid"});
+        // today against yesterday and the last months
+        List<String> name = new ArrayList<>();
+        List<Double> val = new ArrayList<>();
+        name.add("Today"); val.add(self);
+        name.add("Yesterday"); val.add(selfPct(n.ydayHome, n.ydayBought));
+        for (int i = 1; i < months.size() && name.size() < 5; i++) {
+            SolisCloud.Month m = months.get(i);
+            name.add(monthName(m.ym, false)); val.add(selfPct(m.home, m.bought));
+        }
+        float cy = y + px(200), cw = w / name.size();
+        text(c, "Self-powered, compared", x, cy, 12, DIM, false);
+        for (int i = 0; i < name.size(); i++) {
+            float cx = x + i * cw;
+            text(c, name.get(i), cx, cy + px(22), 11, i == 0 ? Color.WHITE : DIM, i == 0);
+            text(c, pct(val.get(i)), cx, cy + px(44), 18, i == 0 ? BATTERY : Color.WHITE, true);
+            p.setColor(0x14FFFFFF);
+            c.drawRoundRect(new RectF(cx, cy + px(52), cx + cw - px(14), cy + px(56)), px(2), px(2), p);
+            if (!Double.isNaN(val.get(i))) {
+                p.setColor(i == 0 ? BATTERY : (BATTERY & 0x00FFFFFF) | 0x99000000);
+                c.drawRoundRect(new RectF(cx, cy + px(52), cx + (cw - px(14)) * (float) (val.get(i) / 100), cy + px(56)), px(2), px(2), p);
+            }
+        }
+    }
+
+    /** 3: yesterday, against the day before and the last week, with the last two weeks as bars. */
+    private void drawDaysPanel(Canvas c, float l, float t, float rr, float b) {
+        float[] o = frame(c, l, t, rr, b, HOME, "Days", 3);
+        float x = o[0], y = o[1], w = rr - l - px(52);
+        SolisCloud.Reading n = now;
+        List<SolisCloud.Month> ds = days;
+        if (ds.isEmpty()) { text(c, "Loading the last two weeks…", x, y + px(40), 15, DIM, false); return; }
+        SimpleDateFormat iso = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        String today = iso.format(cal.getTime());
+        cal.add(java.util.Calendar.DAY_OF_MONTH, -1);
+        String yday = iso.format(cal.getTime());
+        cal.add(java.util.Calendar.DAY_OF_MONTH, -1);
+        String before = iso.format(cal.getTime());
+        SolisCloud.Month y1 = null, y2 = null;
+        List<SolisCloud.Month> week = new ArrayList<>();
+        for (SolisCloud.Month d : ds) {
+            if (d.ym.equals(yday)) y1 = d;
+            if (d.ym.equals(before)) y2 = d;
+            if (d.ym.compareTo(today) < 0 && week.size() < 7) week.add(d);
+        }
+        SolisCloud.Month avg = new SolisCloud.Month();
+        for (SolisCloud.Month d : week) {
+            avg.gen += d.gen / week.size(); avg.home += d.home / week.size(); avg.sold += d.sold / week.size(); avg.bought += d.bought / week.size();
+        }
+        if (y1 != null) headline(c, x, y, w, kw(y1.home) + " used yesterday",
+                "made " + fmt(y1.gen) + "  ·  sold " + fmt(y1.sold) + "  ·  bought " + fmt(y1.bought) + " kWh");
+        else headline(c, x, y, w, n != null ? kw(n.ydayHome) + " used yesterday" : "—", "");
+
+        // the last 14 days, oldest on the left: made and used
+        int k = Math.min(14, ds.size());
+        float bt = y + px(80), bb = y + px(160), gw = w / k, bw = Math.max(px(2), gw * 0.3f);
+        double max = 1;
+        for (int i = 0; i < k; i++) max = Math.max(max, Math.max(ds.get(i).gen, ds.get(i).home));
+        p.setColor(0x1FFFFFFF);
+        c.drawRect(x, bb, x + w, bb + px(1), p);
+        for (int i = 0; i < k; i++) {
+            SolisCloud.Month d = ds.get(k - 1 - i);
+            float cx = x + gw * (i + 0.5f);
+            boolean isToday = d.ym.equals(today), isY = d.ym.equals(yday);
+            int a = isY ? 0xFF000000 : 0x88000000;
+            float h1 = (bb - bt) * (float) (d.gen / max), h2 = (bb - bt) * (float) (d.home / max);
+            p.setColor((SOLAR & 0x00FFFFFF) | a);
+            c.drawRoundRect(new RectF(cx - bw - px(1), bb - h1, cx - px(1), bb), px(2), px(2), p);
+            p.setColor((HOME & 0x00FFFFFF) | a);
+            c.drawRoundRect(new RectF(cx + px(1), bb - h2, cx + bw + px(1), bb), px(2), px(2), p);
+            String dn = isToday ? "now" : d.ym.substring(8);
+            text(c, dn, cx - width(dn, 10, isY) / 2, bb + px(14), 10, isY ? Color.WHITE : 0x80FFFFFF, isY);
+        }
+        p.setColor(SOLAR); c.drawCircle(x + w - px(84), bt - px(6), px(3), p);
+        text(c, "made", x + w - px(78), bt - px(2), 10, DIM, false);
+        p.setColor(HOME); c.drawCircle(x + w - px(40), bt - px(6), px(3), p);
+        text(c, "used", x + w - px(34), bt - px(2), 10, DIM, false);
+
+        // yesterday, the day before, the last week's average
+        String[] head = {"Yesterday", "Day before", "7-day avg"};
+        SolisCloud.Month[] cols = {y1, y2, week.isEmpty() ? null : avg};
+        String[] rows = {"Made", "Used", "Sold", "Bought", "Self-powered"};
+        float tx = x + px(84), cw = (w - px(84)) / 3, ty = bb + px(38);
+        for (int i = 0; i < 3; i++) text(c, head[i], tx + i * cw, ty, 11, i == 0 ? Color.WHITE : DIM, true);
+        float rh = Math.min(px(17), (b - px(10) - ty) / (rows.length + 0.5f));
+        for (int r0 = 0; r0 < rows.length; r0++) {
+            float yy = ty + (r0 + 1) * rh;
+            text(c, rows[r0], x, yy, 12, DIM, false);
+            for (int i = 0; i < 3; i++) {
+                SolisCloud.Month q = cols[i];
+                String v = q == null ? "—" : r0 == 0 ? fmt(q.gen) : r0 == 1 ? fmt(q.home) : r0 == 2 ? fmt(q.sold) : r0 == 3 ? fmt(q.bought) : pct(selfPct(q.home, q.bought));
+                text(c, v, tx + i * cw, yy, 12, i == 0 ? Color.WHITE : 0xCCFFFFFF, true);
+            }
+        }
+    }
+
+    /** 4: the inverter: temperature, the panel strings, efficiency, DC bus, the grid it feeds, today's output. */
+    private void drawInverterPanel(Canvas c, float l, float t, float rr, float b) {
+        float[] o = frame(c, l, t, rr, b, ORANGE, "Inverter", 4);
+        float x = o[0], y = o[1], w = rr - l - px(52);
+        SolisCloud.Reading n = now;
+        if (n == null || n.demo) { text(c, "Waiting for SolisCloud…", x, y + px(40), 15, DIM, false); return; }
+        double dc = (Double.isNaN(n.pv1W) ? 0 : n.pv1W) + (Double.isNaN(n.pv2W) ? 0 : n.pv2W);
+        headline(c, x, y, w, Double.isNaN(n.invTemp) ? "—" : String.format(Locale.US, "%.1f °C", n.invTemp),
+                (Double.isNaN(n.acKw) ? "" : String.format(Locale.US, "putting out %.2f kW", n.acKw))
+                        + (Double.isNaN(n.capacityKw) || n.capacityKw <= 0 ? "" : String.format(Locale.US, "  ·  panels at %.0f%% of %.1f kW", 100 * n.solar / 1000 / n.capacityKw, n.capacityKw)));
+        String eff = dc > 300 && !Double.isNaN(n.acKw) ? String.format(Locale.US, "%.0f%%", Math.min(100, n.acKw * 1000 / dc * 100)) : "—";
+        facts(c, x, y + px(72), w / 2, px(42), new String[][]{
+                {"String 1" + vi(n.pv1V, n.pv1A), power0(n.pv1W)}, {"String 2" + vi(n.pv2V, n.pv2A), power0(n.pv2W)},
+                {"Efficiency (DC to AC)", eff}, {"DC bus", Double.isNaN(n.dcBus) ? "—" : String.format(Locale.US, "%.0f V", n.dcBus)},
+                {"Grid frequency", Double.isNaN(n.hz) ? "—" : String.format(Locale.US, "%.2f Hz", n.hz)},
+                {"Grid, 3 phases (V)", Double.isNaN(n.v1) ? "—" : String.format(Locale.US, "%.0f/%.0f/%.0f", n.v1, n.v2, n.v3)}}, 18);
+        drawChart(c, l + px(20), y + px(212), rr - px(20), b - px(14), 0);
+    }
+
+    /** 5: everything since the system was installed. */
+    private void drawLifePanel(Canvas c, float l, float t, float rr, float b) {
+        int green = 0xFF8BD17C;
+        float[] o = frame(c, l, t, rr, b, green, "Since installed", 5);
+        float x = o[0], y = o[1], w = rr - l - px(52);
+        SolisCloud.Reading n = now;
+        if (n == null || n.demo) { text(c, "Waiting for SolisCloud…", x, y + px(40), 15, DIM, false); return; }
+        SolisCloud.Month a = life;
+        double made = !Double.isNaN(n.totalGen) ? n.totalGen : a != null ? a.gen : Double.NaN;
+        String sub = "made" + (n.since.isEmpty() ? "" : " since " + n.since.split(" ")[0])
+                + (Double.isNaN(n.days) ? "" : String.format(Locale.US, "  ·  %.0f days  ·  %.1f kWh a day", n.days, made / Math.max(1, n.days)));
+        headline(c, x, y, w, kw(made), sub);
+        String mg = Integer.toString(MONEY), gr = Integer.toString(green);
+        String[][] cells = a == null ? new String[][]{{"Loading…", "—"}} : new String[][]{
+                {"Used at home", kw(a.home)}, {"Self-powered", pct(selfPct(a.home, a.bought))},
+                {"Sold to the grid", kw(a.sold)}, {"Bought from the grid", kw(a.bought)},
+                {"Battery charged", kw(a.charged)}, {"Battery discharged", kw(a.discharged)},
+                {"Earned selling ≈ (5c)", dollars(a.sold * SELL_EST / 100), mg}, {"Saved on bills ≈ (30c)", dollars(Math.max(0, a.home - a.bought) * BUY_EST / 100), mg},
+                {"CO₂ avoided", Double.isNaN(n.co2t) ? "—" : String.format(Locale.US, "%.1f t", n.co2t), gr},
+                {"Battery round trip", a.charged > 0 ? String.format(Locale.US, "%.0f%% back out", 100 * a.discharged / a.charged) : "—"}};
+        facts(c, x, y + px(70), w / 2, px(40), cells, 17);
+    }
+
+    /** One day of Open-Meteo's forecast: weather code, sunshine hours, sunlight (MJ/m²), top temperature. */
+    static final class Forecast { String date; int code; double sunH, rad, tmax; }
+
+    /** Blocking: today and the next three days for where the TV is (the home screen's location). */
+    private List<Forecast> forecast() throws Exception {
+        List<Forecast> l = new ArrayList<>();
+        if (!prefs.contains("wx_lat")) return l;
+        java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL("https://api.open-meteo.com/v1/forecast?latitude="
+                + prefs.getFloat("wx_lat", 0) + "&longitude=" + prefs.getFloat("wx_lon", 0)
+                + "&daily=weather_code,temperature_2m_max,sunshine_duration,shortwave_radiation_sum&timezone=auto&forecast_days=4").openConnection();
+        h.setConnectTimeout(10_000);
+        h.setReadTimeout(15_000);
+        try (java.io.InputStream in = h.getInputStream()) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int k;
+            while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+            org.json.JSONObject d = new org.json.JSONObject(out.toString("UTF-8")).getJSONObject("daily");
+            org.json.JSONArray tm = d.getJSONArray("time");
+            for (int i = 0; i < tm.length(); i++) {
+                Forecast f = new Forecast();
+                f.date = tm.getString(i);
+                f.code = d.getJSONArray("weather_code").optInt(i, 3);
+                f.sunH = d.getJSONArray("sunshine_duration").optDouble(i, 0) / 3600;
+                f.rad = d.getJSONArray("shortwave_radiation_sum").optDouble(i, 0);
+                f.tmax = d.getJSONArray("temperature_2m_max").optDouble(i, Double.NaN);
+                l.add(f);
+            }
+        } finally {
+            h.disconnect();
+        }
+        return l;
+    }
+
+    /** Once a day after sunset, learn how much the panels make per unit of forecast sunlight (for the estimates). */
+    private void calibrate() {
+        SolisCloud.Reading n = now;
+        if (n == null || n.demo || forecast.isEmpty() || Double.isNaN(n.capacityKw) || n.capacityKw <= 0) return;
+        Forecast f = forecast.get(0);
+        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+        if (!f.date.equals(today) || today.equals(prefs.getString("sun_pr_day", "")) || f.rad < 2 || n.genToday < 1) return;
+        int set = minuteOf(n.sunset);
+        if (set < 0 || nowMinute() < set + 15) return;
+        double pr = Math.max(0.3, Math.min(1.2, n.genToday / (f.rad / 3.6 * n.capacityKw)));
+        double old = prefs.getFloat("sun_pr", 0.75f);
+        prefs.edit().putFloat("sun_pr", (float) (old * 0.6 + pr * 0.4)).putString("sun_pr_day", today).apply();
+        Log.i("Solis", String.format(Locale.US, "panels made %.2f of forecast sunlight today (now %.2f)", pr, old * 0.6 + pr * 0.4));
+    }
+
+    private static int minuteOf(String hhmm) {
+        try { String[] a = hhmm.trim().split(":"); return Integer.parseInt(a[0]) * 60 + Integer.parseInt(a[1].substring(0, 2)); }
+        catch (Exception e) { return -1; }
+    }
+
+    /** 6: sunrise and sunset, and the next days' sunshine with the solar it should bring. */
+    private void drawSunPanel(Canvas c, float l, float t, float rr, float b) {
+        int gold = 0xFFFFC94D;
+        float[] o = frame(c, l, t, rr, b, gold, "Sun", 6);
+        float x = o[0], y = o[1], w = rr - l - px(52);
+        SolisCloud.Reading n = now;
+        if (n == null || n.demo) { text(c, "Waiting for SolisCloud…", x, y + px(40), 15, DIM, false); return; }
+        int rise = minuteOf(n.sunrise), set = minuteOf(n.sunset);
+        String len = rise >= 0 && set > rise ? String.format(Locale.US, "%d h %02d min of daylight", (set - rise) / 60, (set - rise) % 60) : "";
+        headline(c, x, y, w, "Sunset " + (n.sunset.isEmpty() ? "—" : n.sunset),
+                (n.sunrise.isEmpty() ? "" : "rose " + n.sunrise + "  ·  ") + len
+                        + (Double.isNaN(n.peakSunHours) ? "" : String.format(Locale.US, "  ·  %.1f sun h", n.peakSunHours)));
+        List<Forecast> fc = forecast;
+        float ty = y + px(84);
+        if (fc.isEmpty()) text(c, "Loading the forecast…", x, ty, 13, DIM, false);
+        else {
+            double pr = prefs.getFloat("sun_pr", 0.75f), cap = n.capacityKw;
+            float cw = w / fc.size();
+            SimpleDateFormat iso = new SimpleDateFormat("yyyy-MM-dd", Locale.US), dn = new SimpleDateFormat("EEE", Locale.US);
+            for (int i = 0; i < fc.size(); i++) {
+                Forecast f = fc.get(i);
+                float cx = x + i * cw;
+                String name = i == 0 ? "Today" : i == 1 ? "Tomorrow" : f.date;
+                if (i > 1) try { name = dn.format(iso.parse(f.date)); } catch (Exception ignored) { }
+                text(c, name, cx, ty, 13, i == 1 ? Color.WHITE : 0xDDFFFFFF, true);
+                text(c, fit(sky(f.code), 11, false, cw - px(8)), cx, ty + px(18), 11, DIM, false);
+                text(c, String.format(Locale.US, "%.1f h sun", f.sunH), cx, ty + px(36), 12, Color.WHITE, false);
+                String exp = Double.isNaN(cap) || cap <= 0 ? "—" : String.format(Locale.US, "%.0f", f.rad / 3.6 * cap * pr);
+                text(c, exp, cx, ty + px(58), 17, gold, true);
+                if (!exp.equals("—")) text(c, " kWh", cx + width(exp, 17, true), ty + px(58), 11, DIM, false);
+                if (!Double.isNaN(f.tmax)) text(c, Math.round(f.tmax) + "°", cx, ty + px(76), 11, DIM, false);
+            }
+            text(c, fit(String.format(Locale.US, "Solar expected: forecast sunlight × your %s panels", Double.isNaN(cap) ? "" : fmt(cap) + " kW"), 10, false, w),
+                    x, ty + px(96), 10, 0x80FFFFFF, false);
+        }
+        drawChart(c, l + px(20), ty + px(112), rr - px(20), b - px(14), 0);
+    }
+
     // ------------------------------------------------------------------ months: this one so far against the three before
 
     /** Days a month's totals cover: the whole month, or for this month the days so far (today counted pro rata). */
@@ -1476,6 +1831,7 @@ class SolarLayer extends android.widget.FrameLayout {
         p.setColor(SOLAR);
         c.drawCircle(x + px(5), y - px(7), px(5), p);
         text(c, "Months", x + px(18), y, 18, Color.WHITE, true);
+        text(c, "2 / 6", rr - px(22) - width("2 / 6", 11, false), y, 11, 0x66FFFFFF, false);
         List<SolisCloud.Month> ms = months;
         if (ms.isEmpty()) { text(c, "Loading the last few months…", x, y + px(40), 15, DIM, false); return; }
 
@@ -1618,7 +1974,7 @@ class SolarLayer extends android.widget.FrameLayout {
             text(c, num, cx, ry + px(35), 20, Color.WHITE, true);
             if (energy) text(c, vv.substring(vv.lastIndexOf(' ')), cx + width(num, 20, true), ry + px(35), 11, DIM, false);
         }
-        drawChart(c, l + px(20), cy0 + px(100), rr - px(20), b - px(14));
+        drawChart(c, l + px(20), cy0 + px(100), rr - px(20), b - px(14), sel);
     }
 
     /** Energy in kWh, or MWh once it's big; a dash when not reported. */
@@ -1652,12 +2008,13 @@ class SolarLayer extends android.widget.FrameLayout {
             float x = l + i * (tw + gap);
             r.set(x, t, x + tw, b);
             p.setStyle(Paint.Style.FILL);
-            p.setColor(sel == 5 && !onRefresh ? 0x22FFFFFF : 0x12FFFFFF);
+            boolean on = sel - 5 == i && !onRefresh;
+            p.setColor(on ? 0x24FFFFFF : 0x12FFFFFF);
             c.drawRoundRect(r, px(14), px(14), p);
-            if (sel == 5 && !onRefresh && i == 1) {                        // Months is chosen: ring this month's tile
+            if (on) {                                                      // the chosen tile is ringed in its colour
                 p.setStyle(Paint.Style.STROKE);
                 p.setStrokeWidth(px(1.5f));
-                p.setColor(SOLAR);
+                p.setColor(col[i]);
                 c.drawRoundRect(r, px(14), px(14), p);
                 p.setStyle(Paint.Style.FILL);
             }
@@ -1687,13 +2044,13 @@ class SolarLayer extends android.widget.FrameLayout {
     private static String fmt(double kwh) { return String.format(Locale.US, kwh >= 100 ? "%.0f" : "%.1f", kwh); }
 
     /** Today's curve for the chosen part: solar, home use, battery % (grid: solar and home together). */
-    private void drawChart(Canvas c, float l, float t, float rr, float b) {
+    private void drawChart(Canvas c, float l, float t, float rr, float b, int which) {
         String[] title = {"Solar today", "Home use today", "Battery charge today", "Solar and home use today"};
-        text(c, title[sel], l + px(6), t + px(4), 13, DIM, true);
+        text(c, title[which], l + px(6), t + px(4), 13, DIM, true);
         float gt = t + px(16), gb = b - px(18), gl = l + px(6), gr = rr - px(6);
-        boolean pct = sel == 2;
+        boolean pct = which == 2;
         double max = pct ? 100 : 1000;
-        if (!pct) for (SolisCloud.Point q : day) max = Math.max(max, sel == 0 ? q.solar : sel == 1 ? q.home : Math.max(q.solar, q.home));
+        if (!pct) for (SolisCloud.Point q : day) max = Math.max(max, which == 0 ? q.solar : which == 1 ? q.home : Math.max(q.solar, q.home));
         if (!pct) max = Math.ceil(max / 1000) * 1000;
         p.setStrokeWidth(px(1));
         p.setColor(0x14FFFFFF);
@@ -1708,7 +2065,7 @@ class SolarLayer extends android.widget.FrameLayout {
         }
         if (day.size() < 2) return;
         float span = gr - gl;
-        int[] series = sel == 3 ? new int[]{0, 1} : new int[]{sel == 2 ? 2 : sel};
+        int[] series = which == 3 ? new int[]{0, 1} : new int[]{which == 2 ? 2 : which};
         for (int sIdx : series) {
             int color = sIdx == 0 ? SOLAR : sIdx == 1 ? HOME : BATTERY;
             path.reset();
