@@ -1360,33 +1360,58 @@ class SolarLayer extends android.widget.FrameLayout {
         c.drawPath(path, p);
         p.setStyle(Paint.Style.FILL);
         if (!on) return;
-        // arrowheads (chevrons) pointing the way the power flows, moving along the cable; one path per cable
-        float total = len[m - 1], gap = px(15), speed = px(24) + px(22) * (float) Math.log10(1 + watts / 100);
-        float shift = (float) ((time * (double) speed / 1000) % gap), a = px(3.4f);
+        // small glowing arrowheads pointing the way the power flows, each pulling a fading trail along the cable
+        float total = len[m - 1], gap = px(18), speed = px(24) + px(22) * (float) Math.log10(1 + watts / 100);
+        float shift = (float) ((time * (double) speed / 1000) % gap), a = px(2.6f), trail = gap * 0.85f;
+        int steps = 6;
         Path arrows = new Path();
+        Path[] fade = new Path[steps];
+        for (int k = 0; k < steps; k++) fade[k] = new Path();
+        float[] pt = new float[4];
         for (float s = shift; s < total; s += gap) {
             float d = forward ? s : total - s;
-            int k = 1;
-            while (k < m - 1 && len[k] < d) k++;
-            float sl = Math.max(1, len[k] - len[k - 1]), f = (d - len[k - 1]) / sl;
-            float x = X[k - 1] + (X[k] - X[k - 1]) * f, y = Y[k - 1] + (Y[k] - Y[k - 1]) * f;
-            float ux = (X[k] - X[k - 1]) / sl, uy = (Y[k] - Y[k - 1]) / sl;          // along the cable
+            along(X, Y, len, d, pt);
+            float x = pt[0], y = pt[1], ux = pt[2], uy = pt[3];
             if (!forward) { ux = -ux; uy = -uy; }
             float tipX = x + ux * a * 0.6f, tipY = y + uy * a * 0.6f;                // > shape: tip ahead, wings behind
-            arrows.moveTo(tipX - ux * a - uy * a * 0.8f, tipY - uy * a + ux * a * 0.8f);
+            arrows.moveTo(tipX - ux * a - uy * a * 0.85f, tipY - uy * a + ux * a * 0.85f);
             arrows.lineTo(tipX, tipY);
-            arrows.lineTo(tipX - ux * a + uy * a * 0.8f, tipY - uy * a - ux * a * 0.8f);
+            arrows.lineTo(tipX - ux * a + uy * a * 0.85f, tipY - uy * a - ux * a * 0.85f);
+            for (int k = 0; k < steps; k++) {                                     // the trail, brighter towards the arrow
+                float d0 = d - (forward ? 1 : -1) * trail * (1 - (float) k / steps), d1 = d - (forward ? 1 : -1) * trail * (1 - (float) (k + 1) / steps);
+                if (Math.min(d0, d1) < 0 || Math.max(d0, d1) > total) continue;
+                along(X, Y, len, d0, pt);
+                fade[k].moveTo(pt[0], pt[1]);
+                along(X, Y, len, d1, pt);
+                fade[k].lineTo(pt[0], pt[1]);
+            }
         }
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeCap(Paint.Cap.ROUND);
         p.setStrokeJoin(Paint.Join.ROUND);
-        p.setStrokeWidth(px(3.6f));
-        p.setColor((color & 0x00FFFFFF) | 0x45000000);                                  // soft glow
+        p.setStrokeWidth(px(1.8f));
+        for (int k = 0; k < steps; k++) {
+            p.setColor((color & 0x00FFFFFF) | ((int) (0xC0 * (k + 1f) / steps * (k + 1f) / steps) << 24));
+            c.drawPath(fade[k], p);
+        }
+        p.setStrokeWidth(px(4.2f));
+        p.setColor((color & 0x00FFFFFF) | 0x50000000);                                  // glow
         c.drawPath(arrows, p);
-        p.setStrokeWidth(px(1.6f));
-        p.setColor(color);
+        p.setStrokeWidth(px(1.3f));
+        p.setColor(mix(color, 0xFFFFFFFF, 0.45f));                                      // bright core
         c.drawPath(arrows, p);
         p.setStyle(Paint.Style.FILL);
+    }
+
+    /** The point at distance d along a polyline and its direction: out = {x, y, ux, uy}. */
+    private static void along(float[] X, float[] Y, float[] len, float d, float[] out) {
+        int m = X.length, k = 1;
+        while (k < m - 1 && len[k] < d) k++;
+        float sl = Math.max(1, len[k] - len[k - 1]), f = (d - len[k - 1]) / sl;
+        out[0] = X[k - 1] + (X[k] - X[k - 1]) * f;
+        out[1] = Y[k - 1] + (Y[k] - Y[k - 1]) * f;
+        out[2] = (X[k] - X[k - 1]) / sl;
+        out[3] = (Y[k] - Y[k - 1]) / sl;
     }
 
     // ------------------------------------------------------------------ details of the chosen part
