@@ -1366,25 +1366,30 @@ class SolarLayer extends android.widget.FrameLayout {
         p.setStyle(Paint.Style.FILL);
         if (!on) return;
         // small glowing arrowheads pointing the way the power flows, each pulling a fading trail along the cable
-        float total = len[m - 1], gap = Math.min(px(38), Math.max(px(14), total * 0.75f)), speed = px(24) + px(22) * (float) Math.log10(1 + watts / 100);
-        float shift = (float) ((time * (double) speed / 1000) % gap), a = px(2.6f), trail = px(17);
-        int steps = 6;
+        // one arrow sets off every 3 s, so the spacing is what it travels in that time; its trail drains out past the end
+        float total = len[m - 1], speed = px(14) + px(12) * (float) Math.log10(1 + watts / 100), gap = speed * 3;
+        float shift = (time % 3000) / 1000f * speed, a = px(2.6f), trail = px(40);
+        int steps = 10;
         Path arrows = new Path();
         Path[] fade = new Path[steps];
         for (int k = 0; k < steps; k++) fade[k] = new Path();
         float[] pt = new float[4];
-        for (float s = shift; s < total; s += gap) {
+        for (float s = shift; s < total + trail; s += gap) {
             float d = forward ? s : total - s;
-            along(X, Y, len, d, pt);
-            float x = pt[0], y = pt[1], ux = pt[2], uy = pt[3];
-            if (!forward) { ux = -ux; uy = -uy; }
-            float tipX = x + ux * a * 0.6f, tipY = y + uy * a * 0.6f;                // > shape: tip ahead, wings behind
-            arrows.moveTo(tipX - ux * a - uy * a * 0.85f, tipY - uy * a + ux * a * 0.85f);
-            arrows.lineTo(tipX, tipY);
-            arrows.lineTo(tipX - ux * a + uy * a * 0.85f, tipY - uy * a - ux * a * 0.85f);
+            if (s <= total) {
+                along(X, Y, len, d, pt);
+                float x = pt[0], y = pt[1], ux = pt[2], uy = pt[3];
+                if (!forward) { ux = -ux; uy = -uy; }
+                float tipX = x + ux * a * 0.6f, tipY = y + uy * a * 0.6f;            // > shape: tip ahead, wings behind
+                arrows.moveTo(tipX - ux * a - uy * a * 0.85f, tipY - uy * a + ux * a * 0.85f);
+                arrows.lineTo(tipX, tipY);
+                arrows.lineTo(tipX - ux * a + uy * a * 0.85f, tipY - uy * a - ux * a * 0.85f);
+            }
             for (int k = 0; k < steps; k++) {                                     // the trail, brighter towards the arrow
                 float d0 = d - (forward ? 1 : -1) * trail * (1 - (float) k / steps), d1 = d - (forward ? 1 : -1) * trail * (1 - (float) (k + 1) / steps);
-                if (Math.min(d0, d1) < 0 || Math.max(d0, d1) > total) continue;
+                d0 = Math.max(0, Math.min(total, d0));
+                d1 = Math.max(0, Math.min(total, d1));
+                if (d0 == d1) continue;
                 along(X, Y, len, d0, pt);
                 fade[k].moveTo(pt[0], pt[1]);
                 along(X, Y, len, d1, pt);
@@ -1394,6 +1399,11 @@ class SolarLayer extends android.widget.FrameLayout {
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeCap(Paint.Cap.ROUND);
         p.setStrokeJoin(Paint.Join.ROUND);
+        p.setStrokeWidth(px(4.5f));
+        for (int k = steps / 2; k < steps; k++) {                                // a soft blaze around the newer half
+            p.setColor((color & 0x00FFFFFF) | ((int) (0x38 * (k + 1f - steps / 2f) / (steps / 2f)) << 24));
+            c.drawPath(fade[k], p);
+        }
         p.setStrokeWidth(px(1.8f));
         for (int k = 0; k < steps; k++) {
             p.setColor((color & 0x00FFFFFF) | ((int) (0xC0 * (k + 1f) / steps * (k + 1f) / steps) << 24));
