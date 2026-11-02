@@ -158,7 +158,7 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
   Without Amber it estimates at 5c sell / 30c buy. Token: Amber app > Settings > Amber for Developers, then
   `./amber-setup.sh` (`test`, `clear`). `AmberClient` (api.amber.com.au/v1; feed-in prices are what you pay, so
   negative means earned). Prefs `am_token`, `am_site`.
-- Remote: top row PV, Money, Load; bottom row Battery, Grid; Up from the top row reaches Refresh. The details panel
+- Remote: top row PV, Money, Load; bottom row Battery, Grid; below them Months; Up from the top row reaches Refresh. The details panel
   slides in on each change and the chosen label pops. The scene also has a power pole with the overhead service line
   (grid arrows run along it), a car on the driveway, gutters, downpipes, ridge capping and a letterbox.
 - More data: each part's panel shows four facts (PV: today, peak and both panel strings' V/A/kW; Home: today, from
@@ -166,6 +166,11 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
   3-phase voltages, frequency), and a strip along the bottom shows self-powered %, this month, yesterday, the
   inverter's temperature and output, lifetime generation with CO₂ avoided, and sunset. They come from the station
   detail plus the inverter's detail (`/inverter/detail` on the website, `/v1/api/inverterDetail` with a key).
+- Months (▼ from Battery or Grid; the "Made this month" tile is ringed): this month so far against the three before,
+  as kWh a day made and used (bars, so a part month compares fairly) and totals made, used, sold, bought,
+  self-powered % and ≈ earned at 5c. From the year chart: `/chart/station/year` on the website (body `year`, the
+  station's own `timeZone` and `money` from its detail, `version: 1`; `time` gives a "Communication error"),
+  `/v1/api/stationYear` with a key. Fetched hourly.
 - The website's day chart lists are W × `powerPec` in `powerStr` units; home use is `consumeEnergy`.
 - `SolisCloud`: signed requests (HmacSHA1 over POST, Content-MD5, Content-Type, Date, path) to
   `/v1/api/stationDetail` and `/v1/api/stationDay`. Battery and grid directions are learnt from the energy balance

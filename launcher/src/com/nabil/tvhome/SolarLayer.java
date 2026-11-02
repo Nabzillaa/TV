@@ -53,6 +53,8 @@ class SolarLayer extends android.widget.FrameLayout {
 
     private SolisCloud.Reading now;
     private List<SolisCloud.Point> day = new ArrayList<>();
+    private List<SolisCloud.Month> months = new ArrayList<>();   // this month first, then the three before
+    private long monthsAt;
     private String error;
     private long lastDay;
     private boolean loading;
@@ -142,6 +144,7 @@ class SolarLayer extends android.widget.FrameLayout {
                 String err = null;
                 AmberClient.Money mo = null;
                 String aerr = null;
+                List<SolisCloud.Month> mos = null;
                 if (amber.configured() && (wantDay || SystemClock.uptimeMillis() - amberAt > 5 * 60_000)) {
                     try { mo = amber.fetch(); } catch (Exception e) { aerr = e.getMessage(); Log.w("Amber", "poll: " + aerr); }
                 }
@@ -150,6 +153,9 @@ class SolarLayer extends android.widget.FrameLayout {
                 try {
                     r = solis.now();
                     if (wantDay) d = solis.today();
+                    if (wantDay && (months.isEmpty() || SystemClock.uptimeMillis() - monthsAt > 3_600_000L)) {
+                        try { mos = solis.months(); } catch (Exception e) { Log.w("Solis", "months: " + e.getMessage()); }
+                    }
                 } catch (Exception e) {
                     err = e.getMessage();
                     Log.w("Solis", "poll: " + err);
@@ -157,6 +163,7 @@ class SolarLayer extends android.widget.FrameLayout {
                 final SolisCloud.Reading fr = r;
                 final List<SolisCloud.Point> fd = d;
                 final String fe = err;
+                final List<SolisCloud.Month> fmos = mos;
                 ui.post(() -> {
                     if (g != gen) return;
                     loading = false;
@@ -165,6 +172,7 @@ class SolarLayer extends android.widget.FrameLayout {
                     spinAt = 0;
                     if (fr != null) now = fr;
                     if (fd != null) { day = fd; lastDay = SystemClock.uptimeMillis(); }
+                    if (fmos != null && !fmos.isEmpty()) { months = fmos; monthsAt = SystemClock.uptimeMillis(); }
                     error = fe;
                     if (fmo != null) { money = fmo; amberAt = SystemClock.uptimeMillis(); amberError = null; }
                     else if (faerr != null) amberError = faerr;
@@ -186,7 +194,8 @@ class SolarLayer extends android.widget.FrameLayout {
 
     // ------------------------------------------------------------------ remote: pick PV, Load, Battery or Grid
 
-    /** 0 PV (top left), 1 Load (top right), 2 Battery (bottom left), 3 Grid (bottom right). */
+    /** 0 PV (top left), 1 Load (top right), 2 Battery (bottom left), 3 Grid (bottom right), 4 Money (top middle),
+     *  5 Months (the strip along the bottom). */
     private int sel = 2;
 
     @Override public boolean onKeyDown(int code, android.view.KeyEvent e) {
@@ -205,19 +214,19 @@ class SolarLayer extends android.widget.FrameLayout {
         }
         if (code == android.view.KeyEvent.KEYCODE_DPAD_UP && (sel < 2 || sel == 4)) { onRefresh = true; redraw(); return true; }
         int was = sel;
-        // top row: PV, Money, Load; bottom row: Battery, Grid
-        //                 PV  Load Battery Grid Money
-        int[] left  =     {0,  4,   2,      2,   0};
-        int[] right =     {4,  1,   3,      3,   1};
-        int[] up    =     {0,  1,   0,      1,   4};
-        int[] down  =     {2,  3,   2,      3,   3};
+        // top row: PV, Money, Load; bottom row: Battery, Grid; below them the strip (Months)
+        //                 PV  Load Battery Grid Money Months
+        int[] left  =     {0,  4,   2,      2,   0,    5};
+        int[] right =     {4,  1,   3,      3,   1,    5};
+        int[] up    =     {0,  1,   0,      1,   4,    2};
+        int[] down  =     {2,  3,   5,      5,   3,    5};
         switch (code) {
             case android.view.KeyEvent.KEYCODE_DPAD_LEFT: sel = left[sel]; break;
             case android.view.KeyEvent.KEYCODE_DPAD_RIGHT: sel = right[sel]; break;
             case android.view.KeyEvent.KEYCODE_DPAD_UP: sel = up[sel]; break;
             case android.view.KeyEvent.KEYCODE_DPAD_DOWN: sel = down[sel]; break;
             case android.view.KeyEvent.KEYCODE_DPAD_CENTER:
-            case android.view.KeyEvent.KEYCODE_ENTER: sel = new int[]{4, 2, 3, 0, 1}[sel]; break;   // PV, Money, Load, Battery, Grid
+            case android.view.KeyEvent.KEYCODE_ENTER: sel = new int[]{4, 2, 3, 5, 1, 0}[sel]; break;   // PV, Money, Load, Battery, Grid, Months
             default: return super.onKeyDown(code, e);
         }
         if (sel != was) selAt = SystemClock.uptimeMillis();
@@ -235,6 +244,7 @@ class SolarLayer extends android.widget.FrameLayout {
         spinAt = SystemClock.uptimeMillis();
         doneAt = 0;
         lastDay = 0;
+        monthsAt = 0;
         poll.run();
     }
 
@@ -255,7 +265,9 @@ class SolarLayer extends android.widget.FrameLayout {
         int save = k < 1 ? c.saveLayerAlpha(pr.left - px(40), pr.top - px(4), pr.right + px(40), pr.bottom + px(4), (int) (255 * (0.25f + 0.75f * e)))
                 : c.save();
         c.translate((1 - e) * px(28), 0);
-        if (sel == 4) drawMoneyPanel(c, pr.left, pr.top, pr.right, pr.bottom); else drawPanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        if (sel == 4) drawMoneyPanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        else if (sel == 5) drawMonthsPanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        else drawPanel(c, pr.left, pr.top, pr.right, pr.bottom);
         c.restoreToCount(save);
         if (k < 1) back.postInvalidateOnAnimation();
         if (isOpen() && (spinAt > 0 || (doneAt > 0 && t - doneAt < 2600))) back.postInvalidateOnAnimation();   // the Refresh spinner
@@ -292,7 +304,7 @@ class SolarLayer extends android.widget.FrameLayout {
         if (status.length() > 130) status = status.substring(0, 130) + "…";
         text(c, status, px(46), px(76), 13, color, false);
         float bx = drawRefresh(c, w - px(44), px(30));
-        String hint = onRefresh ? "OK: refresh   ·   ▼ back   ·   Back: close" : "◀ ▶ ▲ ▼ choose   ·   Back: close";
+        String hint = onRefresh ? "OK: refresh   ·   ▼ back   ·   Back: close" : "◀ ▶ ▲ ▼ choose   ·   ▼▼ months   ·   Back: close";
         text(c, hint, bx - px(18) - width(hint, 14, false), px(52), 14, DIM, false);
     }
 
@@ -1429,6 +1441,114 @@ class SolarLayer extends android.widget.FrameLayout {
         out[3] = (Y[k] - Y[k - 1]) / sl;
     }
 
+    // ------------------------------------------------------------------ months: this one so far against the three before
+
+    /** Days a month's totals cover: the whole month, or for this month the days so far (today counted pro rata). */
+    private static double daysIn(String ym) {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        String cur = String.format(Locale.US, "%d-%02d", c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH) + 1);
+        if (ym.equals(cur)) return c.get(java.util.Calendar.DAY_OF_MONTH) - 1 + Math.max(0.25, nowMinute() / 1440.0);
+        try {
+            c.set(Integer.parseInt(ym.substring(0, 4)), Integer.parseInt(ym.substring(5, 7)) - 1, 1);
+            return c.getActualMaximum(java.util.Calendar.DAY_OF_MONTH);
+        } catch (Exception e) { return 30; }
+    }
+
+    private static String monthName(String ym, boolean full) {
+        try {
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            c.set(Integer.parseInt(ym.substring(0, 4)), Integer.parseInt(ym.substring(5, 7)) - 1, 1);
+            return new SimpleDateFormat(full ? "MMMM" : "MMM", Locale.US).format(c.getTime());
+        } catch (Exception e) { return ym; }
+    }
+
+    private void drawMonthsPanel(Canvas c, float l, float t, float rr, float b) {
+        r.set(l, t, rr, b);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0x14FFFFFF);
+        c.drawRoundRect(r, px(22), px(22), p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(px(1));
+        p.setColor((SOLAR & 0x00FFFFFF) | 0x66000000);
+        c.drawRoundRect(r, px(22), px(22), p);
+        p.setStyle(Paint.Style.FILL);
+        float x = l + px(26), y = t + px(40);
+        p.setColor(SOLAR);
+        c.drawCircle(x + px(5), y - px(7), px(5), p);
+        text(c, "Months", x + px(18), y, 18, Color.WHITE, true);
+        List<SolisCloud.Month> ms = months;
+        if (ms.isEmpty()) { text(c, "Loading the last few months…", x, y + px(40), 15, DIM, false); return; }
+
+        // oldest on the left; per-day rates so a part month compares fairly with whole ones
+        int n = ms.size();
+        SolisCloud.Month[] m = new SolisCloud.Month[n];
+        double[] days = new double[n];
+        for (int i = 0; i < n; i++) { m[i] = ms.get(n - 1 - i); days[i] = daysIn(m[i].ym); }
+        SolisCloud.Month cur = m[n - 1];
+        double genDay = cur.gen / days[n - 1];
+        text(c, String.format(Locale.US, "%.1f kWh a day", genDay), x, y + px(36), 24, Color.WHITE, true);
+        String vs = "";
+        if (n > 1 && m[n - 2].gen > 0) {
+            double was = m[n - 2].gen / days[n - 2], ch = (genDay / was - 1) * 100;
+            vs = String.format(Locale.US, "  ·  %s%.0f%% vs %s", ch >= 0 ? "▲ " : "▼ ", Math.abs(ch), monthName(m[n - 2].ym, true));
+        }
+        text(c, "made so far in " + monthName(cur.ym, true) + vs, x, y + px(56), 12, DIM, false);
+
+        // bars: made and used per day, one pair per month
+        float labW = px(78), gl = x + labW, gr = rr - px(22), colW = (gr - gl) / n;
+        float bt = y + px(84), bb = y + px(160);
+        double max = 1;
+        for (int i = 0; i < n; i++) max = Math.max(max, Math.max(m[i].gen, m[i].home) / days[i]);
+        text(c, "kWh a day", x, bt + px(8), 11, DIM, false);
+        p.setColor(SOLAR); c.drawRoundRect(new RectF(x, bt + px(20), x + px(8), bt + px(28)), px(2), px(2), p);
+        text(c, "made", x + px(13), bt + px(28), 11, DIM, false);
+        p.setColor(HOME); c.drawRoundRect(new RectF(x, bt + px(36), x + px(8), bt + px(44)), px(2), px(2), p);
+        text(c, "used", x + px(13), bt + px(44), 11, DIM, false);
+        p.setStrokeWidth(px(1));
+        p.setColor(0x1FFFFFFF);
+        c.drawLine(gl, bb, gr, bb, p);
+        float bw = Math.min(px(16), colW * 0.28f);
+        for (int i = 0; i < n; i++) {
+            float cx = gl + colW * (i + 0.5f);
+            boolean now0 = i == n - 1;
+            double[] v = {m[i].gen / days[i], m[i].home / days[i]};
+            int[] col = {SOLAR, HOME};
+            for (int k = 0; k < 2; k++) {
+                float bx = cx + (k == 0 ? -bw - px(2) : px(2)), top = bb - (bb - bt - px(12)) * (float) (v[k] / max);
+                p.setColor(now0 ? col[k] : (col[k] & 0x00FFFFFF) | 0x99000000);
+                c.drawRoundRect(new RectF(bx, top, bx + bw, bb), px(3), px(3), p);
+                if (k == 0) {
+                    String sv = String.format(Locale.US, "%.0f", v[0]);
+                    text(c, sv, bx + bw / 2 - width(sv, 10, true) / 2, top - px(3), 10, now0 ? SOLAR : DIM, true);
+                }
+            }
+            String name = monthName(m[i].ym, false) + (now0 ? " so far" : "");
+            text(c, name, cx - width(name, 12, true) / 2, bb + px(16), 12, now0 ? Color.WHITE : DIM, true);
+        }
+
+        // the totals, one column per month under its bars
+        String[] rows = {"Made", "Used", "Sold", "Bought", "Self-powered", "Earned ≈"};
+        float ry = bb + px(36), rh = Math.min(px(17), (b - px(10) - ry) / rows.length);
+        for (int k = 0; k < rows.length; k++) {
+            float yy = ry + k * rh;
+            text(c, rows[k], x, yy, 12, DIM, false);
+            for (int i = 0; i < n; i++) {
+                SolisCloud.Month q = m[i];
+                String v;
+                switch (k) {
+                    case 0: v = fmt(q.gen); break;
+                    case 1: v = fmt(q.home); break;
+                    case 2: v = fmt(q.sold); break;
+                    case 3: v = fmt(q.bought); break;
+                    case 4: v = q.home > 0 ? String.format(Locale.US, "%.0f%%", Math.max(0, Math.min(1, 1 - q.bought / q.home)) * 100) : "—"; break;
+                    default: v = String.format(Locale.US, "$%.0f", q.sold * SELL_EST / 100);
+                }
+                float cx = gl + colW * (i + 0.5f);
+                text(c, v, cx - width(v, 12, true) / 2, yy, 12, k == 5 ? MONEY : i == n - 1 ? Color.WHITE : 0xCCFFFFFF, true);
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ details of the chosen part
 
     private void drawPanel(Canvas c, float l, float t, float rr, float b) {
@@ -1532,8 +1652,15 @@ class SolarLayer extends android.widget.FrameLayout {
             float x = l + i * (tw + gap);
             r.set(x, t, x + tw, b);
             p.setStyle(Paint.Style.FILL);
-            p.setColor(0x12FFFFFF);
+            p.setColor(sel == 5 && !onRefresh ? 0x22FFFFFF : 0x12FFFFFF);
             c.drawRoundRect(r, px(14), px(14), p);
+            if (sel == 5 && !onRefresh && i == 1) {                        // Months is chosen: ring this month's tile
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(px(1.5f));
+                p.setColor(SOLAR);
+                c.drawRoundRect(r, px(14), px(14), p);
+                p.setStyle(Paint.Style.FILL);
+            }
             p.setColor(col[i]);
             c.drawRoundRect(new RectF(x + px(12), t + px(14), x + px(15), t + px(28)), px(1.5f), px(1.5f), p);
             text(c, tiles[i][0], x + px(21), t + px(26), 12, DIM, false);

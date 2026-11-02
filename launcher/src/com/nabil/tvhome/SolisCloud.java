@@ -57,9 +57,15 @@ final class SolisCloud {
     /** One point of today's history: minutes since midnight, solar W, home W, battery %. */
     static final class Point { int minute; double solar, home, soc = -1; }
 
+    /** One month's totals in kWh; ym like 2026-11. */
+    static final class Month { String ym; double gen, home, sold, bought, charged, discharged; }
+
     private final SharedPreferences prefs;
 
     SolisCloud(SharedPreferences prefs) { this.prefs = prefs; }
+
+    // the station's own time zone and currency, which the website's month charts want (from its detail)
+    private Object stationTz, stationMoney;
 
     boolean configured() { return prefs.getString("sc_id", null) != null; }
 
@@ -83,6 +89,8 @@ final class SolisCloud {
     Reading now() throws Exception {
         if (demo()) return demoReading();
         JSONObject d = detail();
+        if (d.has("timeZone")) stationTz = d.opt("timeZone");
+        if (d.has("money")) stationMoney = d.opt("money");
         Reading r = new Reading();
         r.solar = watts(d, "power");
         r.home = watts(d, "familyLoadPower");
@@ -158,6 +166,58 @@ final class SolisCloud {
             p.home = watts(o, "familyLoadPower");
             p.soc = o.optDouble("batteryCapacitySoc", -1);
             list.add(p);
+        }
+        return list;
+    }
+
+    /** Blocking: the last four months (this one so far first), from the year charts (last year's too in Jan - Mar). */
+    List<Month> months() throws Exception {
+        Calendar c = Calendar.getInstance();
+        List<Month> all = new ArrayList<>();
+        if (demo()) return demoMonths(c);
+        if (stationTz == null && web()) { JSONObject d = detail(); stationTz = d.opt("timeZone"); stationMoney = d.opt("money"); }
+        int year = c.get(Calendar.YEAR);
+        if (c.get(Calendar.MONTH) < 3) all.addAll(year(year - 1));
+        all.addAll(year(year));
+        java.util.Collections.sort(all, (a, b) -> b.ym.compareTo(a.ym));
+        String current = String.format(Locale.US, "%d-%02d", year, c.get(Calendar.MONTH) + 1);
+        List<Month> out = new ArrayList<>();
+        for (Month m : all) if (m.ym.compareTo(current) <= 0 && out.size() < 4) out.add(m);
+        return out;
+    }
+
+    private List<Month> year(int year) throws Exception {
+        String id = prefs.getString("sc_station", "");
+        JSONArray a;
+        if (web()) {
+            JSONObject body = new JSONObject().put("id", id).put("year", String.valueOf(year)).put("version", 1)
+                    .put("timeZone", stationTz != null ? stationTz : TimeZone.getDefault().getRawOffset() / 3_600_000)
+                    .put("money", stationMoney != null ? stationMoney : "AUD");
+            a = webCall("/chart/station/year", body).optJSONArray("data");
+        } else {
+            int tz = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 3_600_000;
+            a = call("/v1/api/stationYear", new JSONObject().put("id", id).put("money", "AUD").put("time", String.valueOf(year)).put("timeZone", tz)).optJSONArray("data");
+        }
+        List<Month> list = new ArrayList<>();
+        if (a == null) return list;
+        Calendar c = Calendar.getInstance();
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject o = a.getJSONObject(i);
+            Month m = new Month();
+            m.ym = o.optString("dateStr", "");
+            if (m.ym.length() < 7 && o.optLong("date", 0) > 0) {
+                c.setTimeInMillis(o.optLong("date"));
+                m.ym = String.format(Locale.US, "%d-%02d", c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1);
+            }
+            if (m.ym.length() < 7) continue;
+            m.ym = m.ym.substring(0, 7);
+            m.gen = kwh(o, "energy");
+            m.home = kwh(o, "homeLoadEnergy");
+            m.sold = kwh(o, "gridSellEnergy");
+            m.bought = kwh(o, "gridPurchasedEnergy");
+            m.charged = kwh(o, "batteryChargeEnergy");
+            m.discharged = kwh(o, "batteryDischargeEnergy");
+            list.add(m);
         }
         return list;
     }
@@ -411,6 +471,21 @@ final class SolisCloud {
             soc = Math.max(10, Math.min(100, soc + (p.solar - p.home) * 5 / 60 / 100));   // ~10 kWh battery
             p.soc = soc;
             l.add(p);
+        }
+        return l;
+    }
+
+    private static List<Month> demoMonths(Calendar c) {
+        List<Month> l = new ArrayList<>();
+        Calendar k = (Calendar) c.clone();
+        for (int i = 0; i < 4; i++) {
+            Month m = new Month();
+            m.ym = String.format(Locale.US, "%d-%02d", k.get(Calendar.YEAR), k.get(Calendar.MONTH) + 1);
+            int days = i == 0 ? c.get(Calendar.DAY_OF_MONTH) : k.getActualMaximum(Calendar.DAY_OF_MONTH);
+            double sun = 22 + 6 * Math.cos((k.get(Calendar.MONTH) - 0.5) * Math.PI / 6);       // southern summer peaks in Dec - Jan
+            m.gen = sun * days; m.home = 17 * days; m.sold = m.gen * 0.45; m.bought = 4 * days; m.charged = 8 * days; m.discharged = 7 * days;
+            l.add(m);
+            k.add(Calendar.MONTH, -1);
         }
         return l;
     }
