@@ -1361,8 +1361,8 @@ class SolarLayer extends android.widget.FrameLayout {
         p.setStyle(Paint.Style.FILL);
         if (!on) return;
         // small glowing arrowheads pointing the way the power flows, each pulling a fading trail along the cable
-        float total = len[m - 1], gap = px(18), speed = px(24) + px(22) * (float) Math.log10(1 + watts / 100);
-        float shift = (float) ((time * (double) speed / 1000) % gap), a = px(2.6f), trail = gap * 0.85f;
+        float total = len[m - 1], gap = Math.min(px(38), Math.max(px(14), total * 0.75f)), speed = px(24) + px(22) * (float) Math.log10(1 + watts / 100);
+        float shift = (float) ((time * (double) speed / 1000) % gap), a = px(2.6f), trail = px(17);
         int steps = 6;
         Path arrows = new Path();
         Path[] fade = new Path[steps];
