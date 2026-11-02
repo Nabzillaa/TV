@@ -238,6 +238,7 @@ public class HomeActivity extends Activity {
         EufySetup.handle(this, prefs, i);
         if (GarageDoor.handle(prefs, i) && garageLayer != null) rebuildDock();
         if (SolisCloud.handle(prefs, i) && solarLayer != null) rebuildDock();
+        AmberClient.handle(prefs, i);
         if (eufyHideChange) { cameras.reload(); rebuildDock(); }
         String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell|garage|solar
         if (show != null) {

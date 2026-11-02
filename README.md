@@ -152,6 +152,15 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
 - Drawing: the sky, house and leader lines are one opaque image, redrawn only when the light, the sun's place, the data
   or the selection change; each frame (30 fps) adds just the clouds, the moving arrows on the cables, rain and the label plates. The
   animation clock wraps hourly (uptime in ms is too large for float positions). Background apps slow it: Clean up helps.
+- Money (top centre tile, Amber Electric): today's earnings ≈ kWh sold (SolisCloud) × Amber's half-hourly feed-in
+  prices weighted by when the sun was generating; spending likewise from kWh bought and home use. This month's earned
+  and spent come from Amber's billed usage (a day or so behind). Live buy/sell prices are coloured by Amber's level.
+  Without Amber it estimates at 5c sell / 30c buy. Token: Amber app > Settings > Amber for Developers, then
+  `./amber-setup.sh` (`test`, `clear`). `AmberClient` (api.amber.com.au/v1; feed-in prices are what you pay, so
+  negative means earned). Prefs `am_token`, `am_site`.
+- Remote: top row PV, Money, Load; bottom row Battery, Grid; Up from the top row reaches Refresh. The details panel
+  slides in on each change and the chosen label pops. The scene also has a power pole with the overhead service line
+  (grid arrows run along it), a car on the driveway, gutters, downpipes, ridge capping and a letterbox.
 - `SolisCloud`: signed requests (HmacSHA1 over POST, Content-MD5, Content-Type, Date, path) to
   `/v1/api/stationDetail` and `/v1/api/stationDay`. Battery and grid directions are learnt from the energy balance
   (solar + bought = home + charging + sold) and kept in prefs `sc_sb`/`sc_sg`, as their signs vary by firmware.

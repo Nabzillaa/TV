@@ -32,11 +32,18 @@ import java.util.concurrent.Executors;
  */
 class SolarLayer extends android.widget.FrameLayout {
     private static final int SOLAR = 0xFFFFD60A, HOME = 0xFF64D2FF, GRID = 0xFFBF5AF2, BATTERY = 0xFF30D158,
-            DIM = 0x99FFFFFF, FAINT = 0x33FFFFFF, RED = 0xFFFF453A, ORANGE = 0xFFFF9F0A;
+            DIM = 0x99FFFFFF, FAINT = 0x33FFFFFF, RED = 0xFFFF453A, ORANGE = 0xFFFF9F0A, MONEY = 0xFF63E6BE;
+    // without an Amber token, money is estimated at typical NSW rates (c/kWh)
+    private static final double SELL_EST = 5, BUY_EST = 30;
+    private static final int[] COL = {SOLAR, HOME, BATTERY, GRID, MONEY};
     private static final long POLL_MS = 60_000, DAY_MS = 5 * 60_000;
 
     private final Handler ui;
     private final SolisCloud solis;
+    private final AmberClient amber;
+    private AmberClient.Money money;
+    private String amberError;
+    private long amberAt;
     private final float dp;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -58,6 +65,7 @@ class SolarLayer extends android.widget.FrameLayout {
         this.ui = ui;
         this.solis = solis;
         this.prefs = prefs;
+        this.amber = new AmberClient(prefs);
         dp = c.getResources().getDisplayMetrics().density;
         setVisibility(GONE);
         setFocusable(true);
@@ -132,6 +140,13 @@ class SolarLayer extends android.widget.FrameLayout {
                 SolisCloud.Reading r = null;
                 List<SolisCloud.Point> d = null;
                 String err = null;
+                AmberClient.Money mo = null;
+                String aerr = null;
+                if (amber.configured() && (wantDay || SystemClock.uptimeMillis() - amberAt > 5 * 60_000)) {
+                    try { mo = amber.fetch(); } catch (Exception e) { aerr = e.getMessage(); Log.w("Amber", "poll: " + aerr); }
+                }
+                final AmberClient.Money fmo = mo;
+                final String faerr = aerr;
                 try {
                     r = solis.now();
                     if (wantDay) d = solis.today();
@@ -151,6 +166,8 @@ class SolarLayer extends android.widget.FrameLayout {
                     if (fr != null) now = fr;
                     if (fd != null) { day = fd; lastDay = SystemClock.uptimeMillis(); }
                     error = fe;
+                    if (fmo != null) { money = fmo; amberAt = SystemClock.uptimeMillis(); amberError = null; }
+                    else if (faerr != null) amberError = faerr;
                     redraw();
                 });
             });
@@ -186,15 +203,21 @@ class SolarLayer extends android.widget.FrameLayout {
             redraw();
             return true;
         }
-        if (code == android.view.KeyEvent.KEYCODE_DPAD_UP && sel < 2) { onRefresh = true; redraw(); return true; }
+        if (code == android.view.KeyEvent.KEYCODE_DPAD_UP && (sel < 2 || sel == 4)) { onRefresh = true; redraw(); return true; }
         int was = sel;
+        // top row: PV, Money, Load; bottom row: Battery, Grid
+        //                 PV  Load Battery Grid Money
+        int[] left  =     {0,  4,   2,      2,   0};
+        int[] right =     {4,  1,   3,      3,   1};
+        int[] up    =     {0,  1,   0,      1,   4};
+        int[] down  =     {2,  3,   2,      3,   3};
         switch (code) {
-            case android.view.KeyEvent.KEYCODE_DPAD_LEFT: sel &= ~1; break;
-            case android.view.KeyEvent.KEYCODE_DPAD_RIGHT: sel |= 1; break;
-            case android.view.KeyEvent.KEYCODE_DPAD_UP: sel &= ~2; break;
-            case android.view.KeyEvent.KEYCODE_DPAD_DOWN: sel |= 2; break;
+            case android.view.KeyEvent.KEYCODE_DPAD_LEFT: sel = left[sel]; break;
+            case android.view.KeyEvent.KEYCODE_DPAD_RIGHT: sel = right[sel]; break;
+            case android.view.KeyEvent.KEYCODE_DPAD_UP: sel = up[sel]; break;
+            case android.view.KeyEvent.KEYCODE_DPAD_DOWN: sel = down[sel]; break;
             case android.view.KeyEvent.KEYCODE_DPAD_CENTER:
-            case android.view.KeyEvent.KEYCODE_ENTER: sel = (sel + 1) % 4; break;
+            case android.view.KeyEvent.KEYCODE_ENTER: sel = new int[]{4, 2, 3, 0, 1}[sel]; break;   // PV, Money, Load, Battery, Grid
             default: return super.onKeyDown(code, e);
         }
         if (sel != was) selAt = SystemClock.uptimeMillis();
@@ -226,7 +249,14 @@ class SolarLayer extends android.widget.FrameLayout {
         p.setShader(null);
 
         drawHeader(c, w);
-        drawPanel(c, w * 0.61f, px(104), w - px(40), h - px(36));
+        float k = Math.min(1, (t - selAt) / 260f), e = 1 - (1 - k) * (1 - k) * (1 - k);     // ease out
+        RectF pr = new RectF(w * 0.61f, px(104), w - px(40), h - px(36));
+        int save = k < 1 ? c.saveLayerAlpha(pr.left - px(40), pr.top - px(4), pr.right + px(40), pr.bottom + px(4), (int) (255 * (0.25f + 0.75f * e)))
+                : c.save();
+        c.translate((1 - e) * px(28), 0);
+        if (sel == 4) drawMoneyPanel(c, pr.left, pr.top, pr.right, pr.bottom); else drawPanel(c, pr.left, pr.top, pr.right, pr.bottom);
+        c.restoreToCount(save);
+        if (k < 1) back.postInvalidateOnAnimation();
         if (isOpen() && (spinAt > 0 || (doneAt > 0 && t - doneAt < 2600))) back.postInvalidateOnAnimation();   // the Refresh spinner
     }
 
@@ -627,7 +657,7 @@ class SolarLayer extends android.widget.FrameLayout {
         float[][] batWire = {{2.9f, 6.6f, 1.4f}, {4.3f, 6.6f, 1.4f}, {4.3f, 6.3f, 1.5f}};
         float[][] gridWire = {{5.7f, 6.15f, 1.9f}, {7.6f, 6.15f, 1.7f}};
         float[][] loadWire = {{5.0f, 6.15f, 1.2f}, {5.0f, 6.15f, 0.2f}};
-        float[][] street = {{8.0f, 6.2f, 1.2f}, {8.0f, 6.6f, 0f}, {8.0f, 9.6f, 0f}};
+        float[][] street = SERVICE_LINE;
         double pv = n == null ? 0 : n.solar, home = n == null ? 0 : n.home, bat = n == null ? 0 : n.battery, grid = n == null ? 0 : n.grid;
         wire(c, pvWire, pv, true, SOLAR, time);
         wire(c, batWire, Math.abs(bat), bat < 0, BATTERY, time);           // discharging: battery -> inverter
@@ -642,10 +672,11 @@ class SolarLayer extends android.widget.FrameLayout {
         c.drawRoundRect(card, px(22), px(22), p);
         p.setStyle(Paint.Style.FILL);
 
-        String[] name = {"PV", "Load", "Battery" + (n != null && n.soc >= 0 ? String.format(Locale.US, "  %.0f%%", n.soc) : ""), "Grid"};
-        drawPlates(c, l, t, rr, b, n, name, new double[]{pv, home, bat, grid});
-        if (!onRefresh) {                                                   // the chosen part pulses
-            int[] col = {SOLAR, HOME, BATTERY, GRID};
+        String[] name = {"PV", "Load", "Battery" + (n != null && n.soc >= 0 ? String.format(Locale.US, "  %.0f%%", n.soc) : ""), "Grid",
+                money != null ? "Earned today" : "Earned today (est.)"};
+        drawPlates(c, l, t, rr, b, n, name, new double[]{pv, home, bat, grid, 0});
+        if (!onRefresh && sel < 4) {                                         // the chosen part pulses
+            int[] col = COL;
             float pulse = (float) (0.5 + 0.5 * Math.sin((time - selAt) / 260.0));
             float tx = sx(TARGET[sel][0], TARGET[sel][1]), ty = sy(TARGET[sel][0], TARGET[sel][1], TARGET[sel][2]);
             p.setStyle(Paint.Style.FILL);
@@ -660,7 +691,8 @@ class SolarLayer extends android.widget.FrameLayout {
     private String baseKey;
 
     private float[][] labelAt(float l, float t, float rr, float b) {
-        return new float[][]{{l + px(28), t + px(14)}, {l + (rr - l) * 0.64f, t + px(14)}, {l + px(28), b - px(92)}, {l + (rr - l) * 0.70f, b - px(92)}};
+        return new float[][]{{l + px(28), t + px(14)}, {l + (rr - l) * 0.64f, t + px(14)}, {l + px(28), b - px(92)}, {l + (rr - l) * 0.70f, b - px(92)},
+                {l + (rr - l) * 0.33f, t + px(14)}};
     }
 
     /** The dashed leader lines from each label to its part (baked into the base image). */
@@ -696,33 +728,215 @@ class SolarLayer extends android.widget.FrameLayout {
     /** The label plates (name, power, status), drawn every frame so clouds and rain pass behind them. */
     private void drawPlates(Canvas c, float l, float t, float rr, float b, SolisCloud.Reading n, String[] name, double[] val) {
         float[][] label = labelAt(l, t, rr, b);
-        int[] col = {SOLAR, HOME, BATTERY, GRID};
-        for (int i = 0; i < 4; i++) {
+        double[] cash = todayMoney();
+        float pop = Math.min(1, (SystemClock.uptimeMillis() - selAt) / 220f);
+        pop = 1 + 0.07f * (float) Math.sin(Math.PI * pop) + 0.03f * pop;                    // a small bounce, settling a bit larger
+        for (int i = 0; i < 5; i++) {
             boolean on = i == sel && !onRefresh;
             float lx = label[i][0], ly = label[i][1];
+            int col = COL[i];
+            String pw = i == 4 ? (cash == null ? "—" : String.format(Locale.US, "$%.2f", cash[0])) : n == null ? "—" : power(val[i]);
+            String st = i == 4 ? (cash == null ? "" : money != null && !Double.isNaN(money.sellNow)
+                    ? String.format(Locale.US, "Sell %.1fc · buy %.0fc", money.sellNow, money.buyNow) : String.format(Locale.US, "at ~%.0fc/kWh", SELL_EST))
+                    : status(i, n);
+            c.save();
+            if (on) c.scale(pop, pop, lx, ly + px(26));
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(px(on ? 3 : 1.6f));
-            p.setColor(on ? col[i] : 0xB3FFFFFF);
+            p.setColor(on ? col : 0xB3FFFFFF);
             c.drawLine(lx - px(10), ly, lx - px(10), ly + px(48), p);
             p.setStyle(Paint.Style.FILL);
-            float vw = Math.max(width(name[i], 13, false), width(power(val[i]), 24, true)) + px(14);
-            p.setColor(0xB30B0C0F);
-            c.drawRoundRect(new RectF(lx - px(6), ly - px(2), lx + vw, ly + px(52)), px(8), px(8), p);
-            text(c, name[i], lx, ly + px(15), 13, on ? col[i] : 0xCCFFFFFF, on);
-            String pw = n == null ? "—" : power(val[i]);
-            text(c, pw, lx, ly + px(44), 24, Color.WHITE, true);
-            String st = status(i, n);
+            float vw = Math.max(width(name[i], 13, false), width(pw, 24, true)) + px(14);
+            p.setColor(on ? 0xD90B0C0F : 0xB30B0C0F);
+            RectF plate = new RectF(lx - px(6), ly - px(2), lx + vw, ly + px(52));
+            c.drawRoundRect(plate, px(8), px(8), p);
+            if (on) {
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(px(1.2f));
+                p.setColor((col & 0x00FFFFFF) | 0x99000000);
+                c.drawRoundRect(plate, px(8), px(8), p);
+                p.setStyle(Paint.Style.FILL);
+            }
+            text(c, name[i], lx, ly + px(15), 13, on ? col : 0xCCFFFFFF, on);
+            text(c, pw, lx, ly + px(44), 24, i == 4 && cash != null ? MONEY : Color.WHITE, true);
             if (!st.isEmpty()) {
                 float sw = width(st, 11, true) + px(14), sy0 = ly + px(58);
                 p.setColor(0xB30B0C0F);
                 c.drawRoundRect(new RectF(lx - px(2), sy0, lx - px(2) + sw, sy0 + px(19)), px(5), px(5), p);
                 p.setStyle(Paint.Style.STROKE);
                 p.setStrokeWidth(px(1));
-                p.setColor(col[i]);
+                p.setColor(col);
                 c.drawRoundRect(new RectF(lx - px(2), sy0, lx - px(2) + sw, sy0 + px(19)), px(5), px(5), p);
                 p.setStyle(Paint.Style.FILL);
-                text(c, st, lx + px(5), sy0 + px(14), 11, col[i], true);
+                text(c, st, lx + px(5), sy0 + px(14), 11, col, true);
             }
+            c.restore();
+        }
+    }
+
+    // ------------------------------------------------------------------ money (Amber Electric)
+
+    /** Today's ≈ {$ earned selling, $ spent buying, c/kWh selling, c/kWh buying}: SolisCloud's kWh at Amber's prices,
+     *  each half hour weighted by how much was generated (selling) or used (buying) then; typical rates without Amber. */
+    private double[] todayMoney() {
+        SolisCloud.Reading n = now;
+        if (n == null || n.demo) return null;
+        double sell = SELL_EST, buy = BUY_EST;
+        AmberClient.Money m = money;
+        if (m != null && !m.today.isEmpty()) {
+            double ws = 0, s = 0, wb = 0, b = 0, ss = 0, sb = 0;
+            int now = nowMinute();
+            for (AmberClient.Price pr : m.today) {
+                if (pr.minute > now) continue;
+                double solar = 0, home = 0;
+                int cnt = 0;
+                for (SolisCloud.Point q : day) if (q.minute >= pr.minute && q.minute < pr.minute + 30) { solar += q.solar; home += q.home; cnt++; }
+                if (cnt > 0) { solar /= cnt; home /= cnt; }
+                ws += solar; s += solar * pr.sell; wb += home; b += home * pr.buy;
+                ss += pr.sell; sb += pr.buy;
+            }
+            int k = 0;
+            for (AmberClient.Price pr : m.today) if (pr.minute <= now) k++;
+            if (k > 0) {
+                sell = ws > 0 ? s / ws : ss / k;
+                buy = wb > 0 ? b / wb : sb / k;
+            }
+        }
+        return new double[]{n.soldToday * sell / 100, n.boughtToday * buy / 100, sell, buy};
+    }
+
+    private static int nowMinute() {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        return c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE);
+    }
+
+    private static String dollars(double v) { return (v < 0 ? "−$" : "$") + String.format(Locale.US, "%.2f", Math.abs(v)); }
+
+    /** Amber's price level as a colour: green when cheap, red at a spike. */
+    private static int levelColor(String level) {
+        switch (level == null ? "" : level) {
+            case "extremelyLow": case "veryLow": case "low": return BATTERY;
+            case "neutral": return 0xFFE5E5EA;
+            case "high": return ORANGE;
+            case "spike": return RED;
+            default: return 0xFFE5E5EA;
+        }
+    }
+
+    private void drawMoneyPanel(Canvas c, float l, float t, float rr, float b) {
+        r.set(l, t, rr, b);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0x14FFFFFF);
+        c.drawRoundRect(r, px(22), px(22), p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(px(1));
+        p.setColor((MONEY & 0x00FFFFFF) | 0x66000000);
+        c.drawRoundRect(r, px(22), px(22), p);
+        p.setStyle(Paint.Style.FILL);
+        AmberClient.Money m = money;
+        float x = l + px(26), y = t + px(40), colW = (rr - l - px(52)) / 2;
+        p.setColor(MONEY);
+        c.drawCircle(x + px(5), y - px(7), px(5), p);
+        text(c, m != null ? "Money  ·  Amber Electric" : "Money  ·  estimate", x + px(18), y, 18, Color.WHITE, true);
+
+        double[] cash = todayMoney();
+        SolisCloud.Reading n = now;
+        if (cash == null) { text(c, n != null && n.demo ? "Not shown with demo data" : "Waiting for SolisCloud…", x, y + px(50), 15, DIM, false); return; }
+        text(c, "≈ " + dollars(cash[0]), x, y + px(58), 42, MONEY, true);
+        text(c, String.format(Locale.US, "earned today  ·  %s kWh sent at ~%.1fc", fmt(n.soldToday), cash[2]), x, y + px(84), 14, DIM, false);
+
+        // live prices, coloured by Amber's level
+        float cy = y + px(108);
+        if (m != null && !Double.isNaN(m.buyNow)) {
+            String a = String.format(Locale.US, "Buy now %.1fc", m.buyNow), s2 = String.format(Locale.US, "Sell now %.1fc", m.sellNow);
+            chip(c, a, x, cy, levelColor(m.levelNow));
+            chip(c, s2, x + width(a, 13, true) + px(34), cy, MONEY);
+        } else {
+            text(c, amberError != null ? "Amber: " + amberError : "Estimated at 5c sell, 30c buy  ·  add Amber for real prices", x, cy + px(14), 12, amberError != null ? RED : DIM, false);
+        }
+
+        String[][] cells = {
+                {"Spent today ≈", dollars(cash[1])}, {"Net today ≈", dollars(cash[0] - cash[1])},
+                {"This month earned", m != null && !Double.isNaN(m.monthEarned) ? dollars(m.monthEarned) : "—"},
+                {"This month spent", m != null && !Double.isNaN(m.monthSpent) ? dollars(m.monthSpent) : "—"}};
+        for (int k = 0; k < 4; k++) {
+            float cx = x + (k % 2) * colW, ry = cy + px(36) + (k / 2) * px(50);
+            text(c, cells[k][0], cx, ry + px(12), 12, DIM, false);
+            int vc = k == 1 ? (cash[0] - cash[1] >= 0 ? MONEY : ORANGE) : k == 2 ? MONEY : Color.WHITE;
+            text(c, cells[k][1], cx, ry + px(36), 21, vc, true);
+        }
+        if (m != null && !m.monthTo.isEmpty()) text(c, "Month from Amber's billing, to " + m.monthTo, x, cy + px(150), 11, 0x80FFFFFF, false);
+        drawPriceChart(c, l + px(20), cy + px(166), rr - px(20), b - px(18), m);
+    }
+
+    private void chip(Canvas c, String s, float x, float y, int color) {
+        float w = width(s, 13, true) + px(20);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor((color & 0x00FFFFFF) | 0x26000000);
+        c.drawRoundRect(new RectF(x, y, x + w, y + px(24)), px(12), px(12), p);
+        text(c, s, x + px(10), y + px(17), 13, color, true);
+    }
+
+    /** Today's half-hourly Amber prices: buying (orange) and selling (green), c/kWh, with now marked. */
+    private void drawPriceChart(Canvas c, float l, float t, float rr, float b, AmberClient.Money m) {
+        text(c, "Amber prices today (c/kWh)", l + px(6), t + px(4), 13, DIM, true);
+        float gt = t + px(16), gb = b - px(18), gl = l + px(6), gr = rr - px(6);
+        if (gb - gt < px(30)) return;
+        for (int hr = 0; hr <= 24; hr += 6) {
+            float xx = gl + (gr - gl) * hr / 24f;
+            String s = String.format(Locale.US, "%02d", hr);
+            float tw = width(s, 11, false);
+            text(c, s, Math.max(gl, Math.min(gr - tw, xx - tw / 2)), b, 11, 0x80FFFFFF, false);
+        }
+        p.setStrokeWidth(px(1));
+        p.setColor(0x14FFFFFF);
+        c.drawLine(gl, gb, gr, gb, p);
+        if (m == null || m.today.size() < 2) {
+            String s = "Add Amber to see today's prices";
+            text(c, s, (gl + gr - width(s, 12, false)) / 2, (gt + gb) / 2, 12, DIM, false);
+            return;
+        }
+        double lo = 0, hi = 10;
+        for (AmberClient.Price q : m.today) { hi = Math.max(hi, Math.max(q.buy, q.sell)); lo = Math.min(lo, Math.min(q.buy, q.sell)); }
+        hi = Math.ceil(hi / 10) * 10;
+        float span = gr - gl;
+        if (lo < 0) {                                                       // zero line when prices go negative
+            float zy = gb - (gb - gt) * (float) ((0 - lo) / (hi - lo));
+            c.drawLine(gl, zy, gr, zy, p);
+        }
+        text(c, String.format(Locale.US, "%.0fc", hi), gr - width(String.format(Locale.US, "%.0fc", hi), 11, false), t + px(4), 11, DIM, false);
+        for (int sIdx = 0; sIdx < 2; sIdx++) {
+            Path line = new Path();
+            boolean first = true;
+            for (AmberClient.Price q : m.today) {
+                double v = sIdx == 0 ? q.buy : q.sell;
+                float x0 = gl + span * q.minute / 1440f, x1 = gl + span * (q.minute + 30) / 1440f, yy = gb - (gb - gt) * (float) ((v - lo) / (hi - lo));
+                if (first) line.moveTo(x0, yy); else line.lineTo(x0, yy);
+                line.lineTo(x1, yy);                                       // a step per half hour
+                first = false;
+            }
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(px(2));
+            p.setStrokeJoin(Paint.Join.ROUND);
+            p.setColor(sIdx == 0 ? ORANGE : MONEY);
+            c.drawPath(line, p);
+        }
+        p.setStyle(Paint.Style.FILL);
+        float xn = gl + span * nowMinute() / 1440f;
+        p.setColor(0x66FFFFFF);
+        c.drawRect(xn - px(0.5f), gt, xn + px(0.5f), gb, p);
+    }
+
+    // the service line: from the meter up the wall to the eave, then sagging across to the power pole's crossarm
+    private static final float[][] SERVICE_LINE;
+    static {
+        float[] eave = {8.0f, 6.35f, 3.45f}, pole = {16.3f, 9.3f, 6.15f};
+        SERVICE_LINE = new float[11][];
+        SERVICE_LINE[0] = new float[]{8.0f, 6.22f, 2.0f};
+        for (int k = 0; k <= 9; k++) {
+            float f = k / 9f;
+            SERVICE_LINE[k + 1] = new float[]{eave[0] + (pole[0] - eave[0]) * f, eave[1] + (pole[1] - eave[1]) * f,
+                    eave[2] + (pole[2] - eave[2]) * f - 0.7f * (float) Math.sin(Math.PI * f)};
         }
     }
 
@@ -857,6 +1071,18 @@ class SolarLayer extends android.widget.FrameLayout {
         tiles(c, roofFront, true);
         fill(c, lit(TRIM, front * 0.95f, o), v(10.3f, 6.5f, 3.8f), v(10.3f, 6.5f, 3.52f), v(-0.3f, 6.5f, 3.52f), v(-0.3f, 6.5f, 3.8f));
         fill(c, lit(TRIM, side * 0.9f, o), v(10.3f, 6.5f, 3.8f), v(10.3f, 3, 7), v(10.3f, 3, 6.75f), v(10.3f, 6.5f, 3.52f));     // barge board
+        // ridge capping, gutter and downpipes
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeCap(Paint.Cap.BUTT);
+        p.setStrokeWidth(Math.max(2, u * 0.16f));
+        p.setColor(lit(0xFF5A5D63, 1.05f, o));
+        c.drawLine(sx(-0.3f, 3), sy(-0.3f, 3, 7.02f), sx(10.3f, 3), sy(10.3f, 3, 7.02f), p);
+        p.setStrokeWidth(Math.max(1.5f, u * 0.1f));
+        p.setColor(lit(0xFFDADAD5, front, o));
+        c.drawLine(sx(-0.3f, 6.55f), sy(-0.3f, 6.55f, 3.5f), sx(10.3f, 6.55f), sy(10.3f, 6.55f, 3.5f), p);
+        for (float dx : new float[]{-0.15f, 10.15f}) c.drawLine(sx(dx, 6.55f), sy(dx, 6.55f, 3.5f), sx(dx, 6.55f), sy(dx, 6.55f, 0.05f), p);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStyle(Paint.Style.FILL);
         drawPanels(c, sun, o);
 
         // equipment: inverter and meter on the wall, the battery in front
@@ -878,6 +1104,56 @@ class SolarLayer extends android.widget.FrameLayout {
         shrub(c, 7.75f, 7.05f, 0.38f, o);
         shrub(c, 15.6f, 6.8f, 0.6f, o);
         tree(c, -1.0f, 8.6f, 1.0f, o);
+        car(c, o, front, side);
+        letterbox(c, 9.9f, 9.55f, o);
+        pole(c, 16.3f, 9.3f, o);
+    }
+
+    /** A white SUV parked on the driveway, nose to the garage. */
+    private void car(Canvas c, Outside o, float front, float side) {
+        float x0 = 11.9f, x1 = 13.3f, y0 = 7.0f, y1 = 9.7f;
+        fill(c, 0x40000000, v(x0 - 0.15f, y0 - 0.1f, 0.01f), v(x1 + 0.25f, y0 - 0.1f, 0.01f), v(x1 + 0.25f, y1 + 0.15f, 0.01f), v(x0 - 0.15f, y1 + 0.15f, 0.01f));
+        int body = 0xFFF2F2F0;
+        // wheels (on the visible right side)
+        p.setColor(lit(0xFF1C1C1E, 1, o));
+        for (float wy : new float[]{7.55f, 9.15f}) {
+            float cx = sx(x1 + 0.01f, wy), cy = sy(x1 + 0.01f, wy, 0.3f), rw = u * 0.34f;
+            c.drawOval(new RectF(cx - rw * 0.75f, cy - rw, cx + rw * 0.75f, cy + rw), p);
+        }
+        box(c, x0, x1, y0, y1, 0.25f, 0.95f, lit(body, front, o), lit(body, side * 0.92f, o), lit(body, 1.02f, o));
+        // cabin with dark glass
+        float cy0 = 7.35f, cy1 = 9.0f;
+        fill(c, lit(0xFF1F2933, 1, o), v(x1 - 0.05f, cy0, 0.95f), v(x1 - 0.05f, cy1, 0.95f), v(x1 - 0.12f, cy1 - 0.25f, 1.5f), v(x1 - 0.12f, cy0 + 0.1f, 1.5f));
+        fill(c, lit(0xFF2B3742, 1, o), v(x0 + 0.05f, cy1, 0.95f), v(x1 - 0.05f, cy1, 0.95f), v(x1 - 0.12f, cy1 - 0.25f, 1.5f), v(x0 + 0.12f, cy1 - 0.25f, 1.5f));
+        fill(c, lit(body, 1.02f, o), v(x0 + 0.12f, cy0 + 0.1f, 1.5f), v(x1 - 0.12f, cy0 + 0.1f, 1.5f), v(x1 - 0.12f, cy1 - 0.25f, 1.5f), v(x0 + 0.12f, cy1 - 0.25f, 1.5f));
+        p.setColor(lit(body, side, o));                                       // pillar between the windows
+        c.drawLine(sx(x1 - 0.08f, 8.2f), sy(x1 - 0.08f, 8.2f, 0.95f), sx(x1 - 0.1f, 8.15f), sy(x1 - 0.1f, 8.15f, 1.5f), p);
+        // lights: tail lights at the back (towards the viewer), glowing a little at night
+        float glow = 1 - o.day;
+        fill(c, mix(0xFF8A1C1C, 0xFFFF3B30, glow), v(x0 + 0.1f, y1 + 0.01f, 0.7f), v(x0 + 0.4f, y1 + 0.01f, 0.7f), v(x0 + 0.4f, y1 + 0.01f, 0.82f), v(x0 + 0.1f, y1 + 0.01f, 0.82f));
+        fill(c, mix(0xFF8A1C1C, 0xFFFF3B30, glow), v(x1 - 0.4f, y1 + 0.01f, 0.7f), v(x1 - 0.1f, y1 + 0.01f, 0.7f), v(x1 - 0.1f, y1 + 0.01f, 0.82f), v(x1 - 0.4f, y1 + 0.01f, 0.82f));
+    }
+
+    /** A timber power pole with a crossarm at the street corner. */
+    private void pole(Canvas c, float x, float y, Outside o) {
+        float bx = sx(x, y), by = sy(x, y, 0), top = sy(x, y, 6.6f), w = u * 0.12f;
+        p.setColor(0x30000000);
+        c.drawOval(new RectF(bx - u * 0.4f, by - u * 0.12f, bx + u * 0.4f, by + u * 0.12f), p);
+        p.setColor(lit(0xFF6B5544, 0.9f, o));
+        c.drawRect(bx - w, top, bx + w, by, p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(Math.max(2, u * 0.11f));
+        p.setColor(lit(0xFF5A4636, 0.9f, o));
+        c.drawLine(sx(x - 0.9f, y), sy(x - 0.9f, y, 6.15f), sx(x + 0.9f, y), sy(x + 0.9f, y, 6.15f), p);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(lit(0xFFDDE3EA, 1, o));                                   // insulators
+        for (float dx : new float[]{-0.7f, 0, 0.7f}) c.drawCircle(sx(x + dx, y), sy(x + dx, y, 6.3f), Math.max(1.5f, u * 0.07f), p);
+    }
+
+    private void letterbox(Canvas c, float x, float y, Outside o) {
+        p.setColor(lit(0xFF5A4636, 0.9f, o));
+        c.drawRect(sx(x, y) - u * 0.04f, sy(x, y, 1.0f), sx(x, y) + u * 0.04f, sy(x, y, 0), p);
+        box(c, x - 0.2f, x + 0.2f, y - 0.25f, y + 0.25f, 1.0f, 1.4f, lit(0xFF3A3D42, 0.9f, o), lit(0xFF2E3136, 0.8f, o), lit(0xFF4A4D52, 1, o));
     }
 
     /** A box seen from the front-right: its front (y1), right (x1) and top faces. */
