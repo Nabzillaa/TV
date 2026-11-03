@@ -33,6 +33,9 @@ import java.util.concurrent.Executors;
  * Garage screen: the NVR camera that watches the door (channel 1, pref gd_cam) live on the left, and a control card on
  * the right with an illustrated door that moves with the real one, its state, one Open / Close button and Cancel.
  * OK presses in the first moment after opening are ignored, so a double press on the dock icon can't move the door.
+ * The opener is one relay pulse to the motor: pressed while the door moves, the button stops it part-way, and the next
+ * press sends it back the other way. Meross only pulses when the command differs from its sensor (open = not fully
+ * closed), so part-way every pulse is a "close" command.
  */
 class GarageLayer extends FrameLayout {
     private static final int GREEN = 0xFF30D158, ORANGE = 0xFFFF9F0A, RED = 0xFFFF453A, GREY = 0x99FFFFFF;
@@ -53,6 +56,7 @@ class GarageLayer extends FrameLayout {
     private GarageDoor.State last = GarageDoor.State.UNKNOWN;
     private long openedAt, movingUntil;
     private boolean target;                                   // where the door is heading while moving
+    private boolean stopped;                                  // stopped part-way; target is where it was heading
 
     GarageLayer(Context c, Handler ui, GarageDoor door, SharedPreferences prefs) {
         super(c);
@@ -288,8 +292,11 @@ class GarageLayer extends FrameLayout {
                 ui.post(() -> {
                     boolean first = last == GarageDoor.State.UNKNOWN;
                     last = s;
-                    if (moving() && s == (target ? GarageDoor.State.OPEN : GarageDoor.State.CLOSED)) movingUntil = 0;
-                    if (!moving() && s != GarageDoor.State.UNKNOWN) art.moveTo(s == GarageDoor.State.OPEN ? 1f : 0f, first ? 0 : 600);
+                    // the sensor only tells closed from not-closed: "open" shows up as soon as the door lifts, so an
+                    // opening door runs its full travel time and only a closing one ends early, on "closed"
+                    if (moving() && !target && s == GarageDoor.State.CLOSED) movingUntil = 0;
+                    if (s == GarageDoor.State.CLOSED) stopped = false;            // closed by hand or by the wall button
+                    if (!moving() && !stopped && s != GarageDoor.State.UNKNOWN) art.moveTo(s == GarageDoor.State.OPEN ? 1f : 0f, first ? 0 : 600);
                     render();
                 });
             });
@@ -304,29 +311,43 @@ class GarageLayer extends FrameLayout {
         if (moving()) {
             state.setText(target ? "Opening…" : "Closing…");
             state.setTextColor(ORANGE);
+        } else if (stopped) {
+            state.setText("Stopped part-way");
+            state.setTextColor(ORANGE);
         } else {
             state.setText(last == GarageDoor.State.OPEN ? "Open" : last == GarageDoor.State.CLOSED ? "Closed" : "Checking…");
             state.setTextColor(last == GarageDoor.State.OPEN ? ORANGE : last == GarageDoor.State.CLOSED ? GREEN : GREY);
         }
-        // the button always offers the opposite of where the door is (or is heading)
-        boolean openNext = moving() ? !target : last != GarageDoor.State.OPEN;
-        action.setText(openNext ? "Open garage" : "Close garage");
+        // moving: Stop; stopped: back the way it came; otherwise the opposite of where the door is
+        boolean openNext = stopped ? !target : last != GarageDoor.State.OPEN;
+        action.setText(moving() ? "Stop" : openNext ? "Open garage" : "Close garage");
         action.setAlpha(known || moving() ? 1f : 0.4f);
     }
 
     private void press() {
         if (SystemClock.uptimeMillis() - openedAt < ARM_MS) return;       // ignore the press that opened the screen
-        if (last == GarageDoor.State.UNKNOWN && !moving()) return;
-        final boolean open = moving() ? !target : last != GarageDoor.State.OPEN;
-        target = open;
-        movingUntil = SystemClock.uptimeMillis() + MOVE_MS;
-        art.moveTo(open ? 1f : 0f, TRAVEL_MS);
+        if (last == GarageDoor.State.UNKNOWN && !moving() && !stopped) return;
+        final boolean cmd;
+        if (moving()) {                                                    // stop where it is
+            movingUntil = 0;
+            stopped = true;
+            art.stop();
+            cmd = last == GarageDoor.State.CLOSED;
+        } else {
+            boolean open = stopped ? !target : last != GarageDoor.State.OPEN;
+            cmd = !stopped && open;                                       // part-way the pulse is always "close"
+            stopped = false;
+            target = open;
+            movingUntil = SystemClock.uptimeMillis() + (open ? TRAVEL_MS : MOVE_MS);
+            art.moveTo(open ? 1f : 0f, TRAVEL_MS);
+        }
         render();
         worker.execute(() -> {
-            boolean ok = door.set(open);
+            boolean ok = door.set(cmd);
             ui.post(() -> {
                 if (!ok) {
                     movingUntil = 0;
+                    stopped = false;
                     art.moveTo(last == GarageDoor.State.OPEN ? 1f : 0f, 400);
                     state.setText("Couldn't reach the opener");
                     state.setTextColor(GREY);
@@ -344,6 +365,8 @@ class GarageLayer extends FrameLayout {
         private ValueAnimator anim;
 
         DoorArt(Context c) { super(c); }
+
+        void stop() { if (anim != null) anim.cancel(); }
 
         void moveTo(float to, long ms) {
             if (anim != null) anim.cancel();
