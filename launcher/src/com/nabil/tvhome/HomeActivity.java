@@ -112,6 +112,8 @@ public class HomeActivity extends Activity {
     // chrome
     private LinearLayout dock;
     private View hud;
+    private View cleanButton;
+    private View lastDockFocus;
     private TextView greeting;
     private FrameLayout allAppsLayer, neofetchLayer;
     private GridView grid;
@@ -400,6 +402,39 @@ public class HomeActivity extends Activity {
         return r;
     }
 
+    /** Clean up, as a pill under the HUD stats: Up from the dock reaches it, Down goes back. */
+    private View buildCleanButton() {
+        LinearLayout b = new LinearLayout(this);
+        b.setOrientation(LinearLayout.HORIZONTAL);
+        b.setGravity(Gravity.CENTER_VERTICAL);
+        b.setPadding(dp(6), dp(3), dp(10), dp(3));
+        b.setFocusable(true);
+        GradientDrawable off = new GradientDrawable();
+        off.setColor(0x2230D158);
+        off.setCornerRadius(dp(8));
+        off.setStroke(Math.max(1, dp(0.5f)), 0x5530D158);
+        GradientDrawable on = new GradientDrawable();
+        on.setColor(0xCC13A86B);
+        on.setCornerRadius(dp(8));
+        on.setStroke(dp(1.5f), Color.WHITE);
+        android.graphics.drawable.StateListDrawable sl = new android.graphics.drawable.StateListDrawable();
+        sl.addState(new int[]{android.R.attr.state_focused}, on);
+        sl.addState(new int[0], off);
+        b.setBackground(sl);
+        ImageView iv = new ImageView(this);
+        iv.setImageBitmap(cleanGlyph());
+        iv.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(4)); }
+        });
+        iv.setClipToOutline(true);
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(18), dp(18));
+        ip.rightMargin = dp(8);
+        b.addView(iv, ip);
+        b.addView(mono("Clean up", Color.WHITE, 12));
+        b.setOnClickListener(this::cleanUp);
+        return b;
+    }
+
     private void buildHud(FrameLayout root) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -431,6 +466,9 @@ public class HomeActivity extends Activity {
         box.addView(hudRow("DSK", tempVal));
         upVal = mono("--", Color.WHITE, 12);
         box.addView(hudRow("UP", upVal));
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
+        cp.topMargin = dp(6);
+        box.addView(cleanButton = buildCleanButton(), cp);
 
         hud = box;
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
@@ -688,8 +726,21 @@ public class HomeActivity extends Activity {
             }
             return true;
         }
+        if (base && cleanButton.hasFocus()) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) { showNeofetch(); return true; }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (lastDockFocus != null && lastDockFocus.getParent() == dock) lastDockFocus.requestFocus(); else focusDock(0);
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) return true;
+        }
+        View f = getCurrentFocus();
+        if (base && f != null && f.getParent() == dock) {     // the dock's ends stop there, not jump up to Clean up
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && dock.indexOfChild(f) == 0) return true;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && dock.indexOfChild(f) == dock.getChildCount() - 1) return true;
+        }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP && base) {
-            if (konamiPos < 2) showNeofetch(); // the first two Ups of the Konami code won't pop it open twice
+            cleanButton.requestFocus();      // Up from the dock: Clean up in the HUD; Up again: neofetch
             return true;
         }
         return super.onKeyDown(keyCode, e);
@@ -843,9 +894,6 @@ public class HomeActivity extends Activity {
         if (solis != null && solis.configured())
             dock.addView(solarDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), solarGlyph()),
                     "Solar", () -> solarLayer.open()));
-        View clean = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), cleanGlyph()), "Clean up", null);
-        clean.setOnClickListener(v -> cleanUp(v));
-        dock.addView(clean);
         dock.addView(dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), gridGlyph()),
                 "All apps", () -> showAllApps(true)));
         AppEntry s = apps.get(SETTINGS_PKG);
@@ -889,7 +937,7 @@ public class HomeActivity extends Activity {
                 action.run();
             }).start();
         });
-        item.setOnFocusChangeListener((v, focused) -> { if (focused) { magnify(dock.indexOfChild(v)); if (onFocus != null) onFocus.run(); } });
+        item.setOnFocusChangeListener((v, focused) -> { if (focused) { lastDockFocus = v; magnify(dock.indexOfChild(v)); if (onFocus != null) onFocus.run(); } });
         return item;
     }
 
@@ -965,8 +1013,9 @@ public class HomeActivity extends Activity {
     /**
      * Free memory and storage without losing anything: with Shizuku running (adb-level rights), `am kill-all` stops the
      * processes Android itself considers safe to stop (idle, cached) and `pm trim-caches` empties every app's cache;
-     * data and sign-ins are untouched, apps just cold-start next time. Without Shizuku, Android 14 only lets the launcher
-     * free its own memory and cache.
+     * data and sign-ins are untouched, apps just cold-start next time. Every app you opened (in Recents, or a launchable
+     * app still running) is force-stopped first, so nothing is left open. Without Shizuku, Android 14 only lets the
+     * launcher free its own memory and cache.
      */
     private void cleanUp(View item) {
         if (cleaning) return;
@@ -982,19 +1031,27 @@ public class HomeActivity extends Activity {
         final long memBefore = availableMemory(am);
         final long diskBefore = getFilesDir().getUsableSpace();
         cameras.release();
+        final java.util.Set<String> launchable = new java.util.HashSet<>(apps.keySet());
         bg.execute(() -> {
+            int closed = 0;
             if (shizuku == SHIZUKU_READY) {
+                java.util.Set<String> opened = openedApps(launchable);
+                for (String pkg : opened) { shell("am force-stop " + pkg); closed++; }
+                // and take them out of Recents (force-stop leaves their tasks listed)
+                java.util.regex.Matcher t = java.util.regex.Pattern.compile("Task\\{\\w+ #(\\d+) type=\\w+ (?:A=\\d+:|I=)([\\w.]+)").matcher(shell("dumpsys activity recents"));
+                while (t.find()) if (opened.contains(t.group(2))) shell("am stack remove " + t.group(1));
                 shell("am kill-all");
                 shell("pm trim-caches 999G");
             } else {
                 clearDir(getCacheDir());
             }
             Runtime.getRuntime().gc();
+            final int n = closed;
             ui.postDelayed(() -> {                      // let the system reclaim the memory before measuring
                 cleaning = false;
                 long mem = Math.max(0, availableMemory(am) - memBefore) / (1024 * 1024);
                 long disk = Math.max(0, getFilesDir().getUsableSpace() - diskBefore) / (1024 * 1024);
-                String msg = "Cleaned up · " + (mem >= 10 ? mem + " MB memory" : "memory already tidy")
+                String msg = "Cleaned up · " + (n > 0 ? n + (n == 1 ? " app" : " apps") + " closed · " : "") + (mem >= 10 ? mem + " MB memory" : "memory already tidy")
                         + (disk >= 1 ? " · " + disk + " MB storage" : "");
                 if (shizuku == SHIZUKU_OFF) msg += "\nStart Shizuku to also close background apps and clear their caches";
                 Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
@@ -1016,15 +1073,40 @@ public class HomeActivity extends Activity {
         }
     }
 
-    /** Run a command as the shell user through Shizuku (its newProcess isn't public API, hence reflection). */
-    private static void shell(String cmd) {
+    /**
+     * Packages to close: apps from the app list that have a task in Recents or a process still running. Recents also
+     * holds System UI, the TV input player and setup screens; only app-list entries are touched.
+     */
+    private java.util.Set<String> openedApps(java.util.Set<String> launchable) {
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:mActivityComponent=|A=\\d+:)([\\w.]+)").matcher(shell("dumpsys activity recents"));
+        while (m.find()) if (launchable.contains(m.group(1))) out.add(m.group(1));
+        for (String line : shell("ps -A -o NAME").split("\n")) {
+            String pkg = line.trim().split(":")[0];
+            if (launchable.contains(pkg)) out.add(pkg);
+        }
+        out.remove(getPackageName());
+        out.remove("moe.shizuku.privileged.api");                   // keep the helper Clean up runs through
+        String ime = android.provider.Settings.Secure.getString(getContentResolver(), android.provider.Settings.Secure.DEFAULT_INPUT_METHOD);
+        if (ime != null) out.remove(ime.split("/")[0]);              // and the keyboard
+        return out;
+    }
+
+    /** Run a command as the shell user through Shizuku (its newProcess isn't public API, hence reflection); returns stdout. */
+    private static String shell(String cmd) {
         try {
             java.lang.reflect.Method m = rikka.shizuku.Shizuku.class.getDeclaredMethod("newProcess", String[].class, String[].class, String.class);
             m.setAccessible(true);
             Process p = (Process) m.invoke(null, new String[]{"sh", "-c", cmd}, null, null);
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            java.io.InputStream in = p.getInputStream();
+            byte[] b = new byte[8192];
+            for (int r; (r = in.read(b)) > 0; ) buf.write(b, 0, r);
             p.waitFor();
+            return buf.toString("UTF-8");
         } catch (Throwable t) {
             android.util.Log.w("CleanUp", cmd + ": " + t);
+            return "";
         }
     }
 

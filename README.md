@@ -24,10 +24,10 @@ talks to that server.
 ## Launcher features
 - Rotating nature wallpapers with Ken Burns pan/zoom and dock parallax (credits: `launcher/assets/CREDITS.txt`)
 - Magnifying dock; hold OK on an app in **All apps** to pin/unpin it (max 8)
-- Live HUD (CPU clock graph, RAM, IP/Wi-Fi, disk, uptime); time-of-day greeting
+- Live HUD (CPU clock graph, RAM, IP/Wi-Fi, disk, uptime, Clean up button); time-of-day greeting
 - Weather card (Open-Meteo; location from an IP lookup, cached for a day; refreshed every 30 min)
 - **Cameras** dock tile (see below)
-- Up or Menu: neofetch panel. Konami code (Up Up Down Down Left Right Left Right): Matrix rain
+- Menu, or Up twice from the dock (the first Up selects Clean up): neofetch panel. Konami code (Up Up Down Down Left Right Left Right): Matrix rain
 - 90 s idle: ambient mode (dock and HUD fade out, photo caption appears)
 
 ## Cameras (Dahua-family NVR)
@@ -186,8 +186,11 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
   `/v1/api/stationDetail` and `/v1/api/stationDay`. Battery and grid directions are learnt from the energy balance
   (solar + bought = home + charging + sold) and kept in prefs `sc_sb`/`sc_sg`, as their signs vary by firmware.
 
-## Clean up (dock button)
-Frees memory and storage without losing anything. With **Shizuku** running it uses adb-level rights: `am kill-all`
+## Clean up (HUD button)
+A button under the stats in the top-left HUD: Up from the dock focuses it, Down goes back, Up again opens neofetch.
+Frees memory and storage without losing anything. With **Shizuku** running it first force-stops every app you opened
+and takes it out of Recents (apps from the app list with a task in Recents or a process running; System UI, the
+launcher, Shizuku and the keyboard are left alone), then `am kill-all`
 (stops only processes Android itself treats as safe to stop: idle and cached apps; Google services, Cast, the
 Assistant and the keyboard keep running) and `pm trim-caches` (empties every app's cache). App data and sign-ins are
 never touched; closed apps just cold-start next time. It also drops the launcher's warm camera streams and the doorbell
