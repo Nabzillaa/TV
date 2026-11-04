@@ -25,9 +25,10 @@ talks to that server.
 - Rotating nature wallpapers with Ken Burns pan/zoom and dock parallax (credits: `launcher/assets/CREDITS.txt`)
 - Magnifying dock; hold OK on an app in **All apps** to pin/unpin it (max 8)
 - Live HUD (CPU clock graph, RAM, IP/Wi-Fi, disk, uptime, Clean up button); time-of-day greeting
+- Small Settings gear in the top-right corner: Up from the right half of the dock (Right from Clean up) selects it
 - Weather card (Open-Meteo; location from an IP lookup, cached for a day; refreshed every 30 min)
-- **Cameras** dock tile (see below)
-- Menu, or Up twice from the dock (the first Up selects Clean up): neofetch panel. Konami code (Up Up Down Down Left Right Left Right): Matrix rain
+- **Cameras** dock tile (see below); Garage, Solar and Aircon dock buttons
+- Menu, or Up twice from the left half of the dock (the first Up selects Clean up): neofetch panel. Konami code (Up Up Down Down Left Right Left Right): Matrix rain
 - 90 s idle: ambient mode (dock and HUD fade out, photo caption appears)
 
 ## Cameras (Dahua-family NVR)
@@ -132,6 +133,27 @@ presses in the first 0.7 s are ignored so a double press on the dock icon can't 
 - Setup: `./meross-setup.sh` signs in to Meross once on the Mac (password hidden, never stored or sent to the TV) to
   get the account key, finds the opener by MAC, checks the key locally, and sends the TV ip/key/uuid/channel/name.
   `./meross-setup.sh test` reads the door state through the TV; `clear` removes it.
+
+## Aircon (Daikin Airbase BRP15B61, ducted, dock button)
+Controlled directly on the LAN through the Airbase's local HTTP API (`Airbase`): GET
+`http://<ip>/skyfi/aircon/get_control_info`, `get_sensor_info`, `get_model_info`, `get_zone_setting` and
+`set_control_info?lpw=&pow=&mode=&stemp=&shum=&f_rate=&f_auto=&f_dir=&f_airside=`; answers are `key=value,...` text.
+No Daikin account or cloud. Codes: mode 0 fan, 1 heat, 2 cool, 3 auto, 7 dry; `f_rate` 1 low, 3 medium, 5 high,
+`f_auto=1` auto. The panel (`AirconLayer`) shows a ceiling vent whose airflow takes the mode's colour and the fan's
+speed, the inside and outside temperatures, and a card with the set temperature (- / +), mode, fan, zones (only when
+the system has named zones; this one has none) and Turn on/off. Changes show at once and go out 0.9 s after the last
+press, so several presses of + are one command. Open it with `--es show aircon`.
+- Timers (on the card, under the set temperature): the Airbase's own quick timer, so they run with the TV off.
+  `get_quick_timer` / `set_quick_timer?t1_ena=&t1_pow=&t1_time=&t2_ena=&t2_pow=&t2_time=`: two slots, `_pow` 1 turns
+  the aircon on and 0 off (the Daikin app keeps t1 = on, t2 = off), `_time` in minutes after midnight (1095 = 6:15 pm).
+  Each has a switch and - / + in 15-minute steps; holding OK on - / + jumps by the hour.
+- Setup: `adb shell am start -n com.nabil.tvhome/.HomeActivity --es aircon 192.168.1.189` (or `--es aircon clear`).
+  It checks the address is a Daikin and keeps its MAC; if the address changes, the TV searches the LAN for that MAC.
+- It answers 403 to any request whose `Host` header isn't its own address (HttpURLConnection sends the right one;
+  hand-made test requests must too). It also answers 403 now and then while busy, and **locks everyone out for minutes when asked too often**, so
+  the panel polls only every 20 s (control info and sensors; limits and zones once per open), retries a 403 twice
+  with a pause, and never treats a 403 as "moved" (no LAN search). `common/basic_info` carries the Daikin app's
+  login in plain text: it is never logged or stored.
 
 ## Solar (Solis inverter + battery, dock button)
 The Solis S3 WiFi stick (192.168.1.109) only talks to SolisCloud (no local ports), so the screen uses the free

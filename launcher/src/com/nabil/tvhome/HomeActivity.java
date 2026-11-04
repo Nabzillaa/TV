@@ -113,6 +113,7 @@ public class HomeActivity extends Activity {
     private LinearLayout dock;
     private View hud;
     private View cleanButton;
+    private ImageView settingsButton;
     private View lastDockFocus;
     private TextView greeting;
     private FrameLayout allAppsLayer, neofetchLayer;
@@ -127,6 +128,9 @@ public class HomeActivity extends Activity {
     private SolisCloud solis;
     private SolarLayer solarLayer;
     private View solarDockItem;
+    private Airbase aircon;
+    private AirconLayer airconLayer;
+    private View airconDockItem;
     private View cameraDockItem;
     private TextView wxIcon, wxTemp, wxDetail;
     private static final long WX_REFRESH_MS = 30 * 60_000L;
@@ -185,6 +189,7 @@ public class HomeActivity extends Activity {
 
         buildClock(root);
         buildHud(root);
+        buildSettingsButton(root);
 
         caption = new TextView(this);
         caption.setTextColor(0xCCFFFFFF);
@@ -207,6 +212,9 @@ public class HomeActivity extends Activity {
         solis = new SolisCloud(prefs);
         solarLayer = new SolarLayer(this, ui, solis, prefs);
         root.addView(solarLayer, new FrameLayout.LayoutParams(-1, -1));
+        aircon = new Airbase(prefs);
+        airconLayer = new AirconLayer(this, ui, aircon);
+        root.addView(airconLayer, new FrameLayout.LayoutParams(-1, -1));
 
         matrix = new MatrixView(this);
         matrix.setVisibility(View.GONE);
@@ -241,11 +249,12 @@ public class HomeActivity extends Activity {
         if (GarageDoor.handle(prefs, i) && garageLayer != null) rebuildDock();
         if (SolisCloud.handle(prefs, i) && solarLayer != null) rebuildDock();
         AmberClient.handle(prefs, i);
+        Airbase.handle(prefs, i, () -> ui.post(() -> { if (airconLayer != null) rebuildDock(); }));
         if (eufyHideChange) { cameras.reload(); rebuildDock(); }
-        String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell|garage|solar
+        String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell|garage|solar|aircon
         if (show != null) {
             i.removeExtra("show");
-            ui.post(() -> { if (show.equals("doorbell")) cameras.showDoorbell(); else if (show.equals("garage")) garageLayer.open(); else if (show.equals("solar")) solarLayer.open(); else cameras.open(); });
+            ui.post(() -> { if (show.equals("doorbell")) cameras.showDoorbell(); else if (show.equals("garage")) garageLayer.open(); else if (show.equals("solar")) solarLayer.open(); else if (show.equals("aircon")) airconLayer.open(); else cameras.open(); });
         }
         String db = i == null ? null : i.getStringExtra("doorbell");     // --es doorbell "Name|https://home.google.com/..." (or clear)
         if (db != null) {
@@ -435,6 +444,32 @@ public class HomeActivity extends Activity {
         return b;
     }
 
+    /** Small Settings gear in the top-right corner, above the clock: Up from the right half of the dock reaches it. */
+    private void buildSettingsButton(FrameLayout root) {
+        settingsButton = new ImageView(this);
+        settingsButton.setFocusable(true);
+        settingsButton.setPadding(dp(5), dp(5), dp(5), dp(5));
+        GradientDrawable ring = new GradientDrawable();
+        ring.setShape(GradientDrawable.OVAL);
+        ring.setStroke(dp(1.5f), Color.WHITE);
+        ring.setColor(0xB3000000);
+        GradientDrawable disc = new GradientDrawable();                // dark disc like the HUD, so it reads on bright sky
+        disc.setShape(GradientDrawable.OVAL);
+        disc.setStroke(Math.max(1, dp(0.5f)), 0x55FFFFFF);
+        disc.setColor(0x8C000000);
+        android.graphics.drawable.StateListDrawable sl = new android.graphics.drawable.StateListDrawable();
+        sl.addState(new int[]{android.R.attr.state_focused}, ring);
+        sl.addState(new int[0], disc);
+        settingsButton.setBackground(sl);
+        settingsButton.setOnFocusChangeListener((v, focused) ->
+                v.animate().scaleX(focused ? 1.25f : 1f).scaleY(focused ? 1.25f : 1f).setDuration(150).start());
+        settingsButton.setOnClickListener(v -> { AppEntry a = apps.get(SETTINGS_PKG); if (a != null) launch(a); });
+        settingsButton.setVisibility(View.GONE);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(34), dp(34), Gravity.TOP | Gravity.END);
+        lp.setMargins(0, dp(10), dp(14), 0);
+        root.addView(settingsButton, lp);
+    }
+
     private void buildHud(FrameLayout root) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -484,7 +519,7 @@ public class HomeActivity extends Activity {
         dock.setGravity(Gravity.CENTER);
         dock.setClipChildren(false);
         dock.setClipToPadding(false);
-        dock.setPadding(dp(20), dp(14), dp(20), dp(8));
+        dock.setPadding(dp(16), dp(12), dp(16), dp(12));
         GradientDrawable dockBg = new GradientDrawable();
         dockBg.setColor(0x73262628);
         dockBg.setCornerRadius(dp(28));
@@ -679,6 +714,7 @@ public class HomeActivity extends Activity {
         cameras.close();
         garageLayer.close();
         solarLayer.close();
+        airconLayer.close();
         if (matrix.getVisibility() == View.VISIBLE) matrix.stop();
         exitAmbient();
     }
@@ -693,6 +729,10 @@ public class HomeActivity extends Activity {
         else if (solarLayer.isOpen()) {
             solarLayer.close();
             if (solarDockItem != null) solarDockItem.requestFocus();
+        }
+        else if (airconLayer.isOpen()) {
+            airconLayer.close();
+            if (airconDockItem != null) airconDockItem.requestFocus();
         }
         else if (cameras.isOpen()) {
             cameras.back();
@@ -716,7 +756,7 @@ public class HomeActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent e) {
-        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE && !cameras.isOpen() && !garageLayer.isOpen() && !solarLayer.isOpen();
+        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE && !cameras.isOpen() && !garageLayer.isOpen() && !solarLayer.isOpen() && !airconLayer.isOpen();
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             if (!base && allAppsLayer.getVisibility() == View.VISIBLE) {
                 int pos = grid.getSelectedItemPosition();
@@ -732,7 +772,16 @@ public class HomeActivity extends Activity {
                 if (lastDockFocus != null && lastDockFocus.getParent() == dock) lastDockFocus.requestFocus(); else focusDock(0);
                 return true;
             }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && settingsButton.getVisibility() == View.VISIBLE) settingsButton.requestFocus();
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) return true;
+        }
+        if (base && settingsButton.hasFocus()) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) cleanButton.requestFocus();
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (lastDockFocus != null && lastDockFocus.getParent() == dock) lastDockFocus.requestFocus(); else focusDock(dock.getChildCount() - 1);
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                    || keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) return true;
         }
         View f = getCurrentFocus();
         if (base && f != null && f.getParent() == dock) {     // the dock's ends stop there, not jump up to Clean up
@@ -740,7 +789,10 @@ public class HomeActivity extends Activity {
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && dock.indexOfChild(f) == dock.getChildCount() - 1) return true;
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP && base) {
-            cleanButton.requestFocus();      // Up from the dock: Clean up in the HUD; Up again: neofetch
+            // Up from the dock: the right half goes to Settings (top right), the left half to Clean up (top left)
+            boolean right = f != null && f.getParent() == dock && settingsButton.getVisibility() == View.VISIBLE
+                    && dock.getLeft() + f.getLeft() + f.getWidth() / 2 > ((View) dock.getParent()).getWidth() / 2;
+            (right ? settingsButton : cleanButton).requestFocus();   // Up again from Clean up: neofetch
             return true;
         }
         return super.onKeyDown(keyCode, e);
@@ -778,13 +830,14 @@ public class HomeActivity extends Activity {
     }
 
     private void enterAmbient() {
-        if (allAppsLayer.getVisibility() == View.VISIBLE || neofetchLayer.getVisibility() == View.VISIBLE || cameras.isOpen() || garageLayer.isOpen() || solarLayer.isOpen()) {
+        if (allAppsLayer.getVisibility() == View.VISIBLE || neofetchLayer.getVisibility() == View.VISIBLE || cameras.isOpen() || garageLayer.isOpen() || solarLayer.isOpen() || airconLayer.isOpen()) {
             ui.postDelayed(idleRunnable, IDLE_MS);
             return;
         }
         ambient = true;
         dock.animate().alpha(0f).translationY(dp(30)).setDuration(900).start();
         hud.animate().alpha(0f).setDuration(900).start();
+        settingsButton.animate().alpha(0f).setDuration(900).start();
         caption.animate().alpha(1f).setDuration(1200).start();
     }
 
@@ -793,6 +846,7 @@ public class HomeActivity extends Activity {
         ambient = false;
         dock.animate().alpha(1f).translationY(0).setDuration(250).start();
         hud.animate().alpha(1f).setDuration(250).start();
+        settingsButton.animate().alpha(1f).setDuration(250).start();
         caption.animate().alpha(0f).setDuration(250).start();
     }
 
@@ -894,10 +948,15 @@ public class HomeActivity extends Activity {
         if (solis != null && solis.configured())
             dock.addView(solarDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), solarGlyph()),
                     "Solar", () -> solarLayer.open()));
+        airconDockItem = null;
+        if (aircon != null && aircon.configured())
+            dock.addView(airconDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), airconGlyph()),
+                    "Aircon", () -> airconLayer.open()));
         dock.addView(dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), gridGlyph()),
                 "All apps", () -> showAllApps(true)));
         AppEntry s = apps.get(SETTINGS_PKG);
-        if (s != null) dock.addView(dockItem(icon(s), "Settings", () -> launch(s)));
+        if (s != null) settingsButton.setImageDrawable(icon(s));
+        settingsButton.setVisibility(s != null ? View.VISIBLE : View.GONE);
     }
 
     private View dockItem(Drawable icon, CharSequence label, Runnable action) { return dockItem(icon, label, action, null); }
@@ -907,17 +966,17 @@ public class HomeActivity extends Activity {
         item.setOrientation(LinearLayout.VERTICAL);
         item.setGravity(Gravity.CENTER_HORIZONTAL);
         item.setClipChildren(false);
+        item.setClipToPadding(false);                     // the name above the icon draws outside the item
         item.setFocusable(true);
-        item.setPadding(dp(5), 0, dp(5), 0);
+        item.setPadding(dp(4), 0, dp(4), 0);
 
         ImageView iv = new ImageView(this);
         iv.setImageDrawable(icon);
         iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
         iv.setOutlineProvider(new ViewOutlineProvider() {
-            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(14)); }
+            @Override public void getOutline(View v, Outline o) { o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), dp(11)); }
         });
         iv.setClipToOutline(true);
-        item.addView(iv, new LinearLayout.LayoutParams(dp(64), dp(64)));
 
         TextView tv = new TextView(this);
         tv.setText(label);
@@ -925,11 +984,15 @@ public class HomeActivity extends Activity {
         tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
         tv.setGravity(Gravity.CENTER);
         tv.setTextColor(Color.WHITE);
-        tv.setTextSize(13);
+        tv.setTextSize(12);
         tv.setAlpha(0f);
         tv.setTag("label");
         tv.setShadowLayer(dp(4), 0, dp(1), 0xCC000000);
-        item.addView(tv, new LinearLayout.LayoutParams(dp(70), dp(24)));
+        // the name floats above the icon (negative margins: it takes no room, so the icons sit centred in the dock)
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(dp(96), dp(20));
+        tp.setMargins(-dp(24), -dp(28), -dp(24), dp(8));
+        item.addView(tv, tp);
+        item.addView(iv, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         item.setOnClickListener(v -> {
             v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(70).withEndAction(() -> {
@@ -948,7 +1011,7 @@ public class HomeActivity extends Activity {
             View c = dock.getChildAt(i);
             int d = Math.abs(i - focusIdx);
             float s = d == 0 ? 1.22f : d == 1 ? 1.08f : 1f;
-            float ty = d == 0 ? -dp(8) : d == 1 ? -dp(3) : 0;
+            float ty = d == 0 ? -dp(2) : 0;                      // small lift: the grown icon stays inside the dock
             c.animate().scaleX(s).scaleY(s).translationY(ty)
                     .setInterpolator(d == 0 ? new OvershootInterpolator(2.2f) : new LinearInterpolator())
                     .setDuration(d == 0 ? 220 : 140).start();
@@ -1164,6 +1227,44 @@ public class HomeActivity extends Activity {
         for (int i = 0; i < 3; i++) {
             float y = s * (0.53f + i * 0.09f);
             c.drawRoundRect(new RectF(s * 0.32f, y, s * 0.68f, y + s * 0.05f), s * 0.015f, s * 0.015f, p);
+        }
+        return bmp;
+    }
+
+    /** Icy blue tile with a white ceiling vent and three streams of air flowing down from it. */
+    private Bitmap airconGlyph() {
+        int s = dp(64) * 2;
+        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setShader(new android.graphics.LinearGradient(0, 0, 0, s, 0xFF7FD8FF, 0xFF1A73E8, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(new android.graphics.RadialGradient(s * 0.5f, -s * 0.15f, s * 0.75f, 0x38FFFFFF, 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(null);
+        p.setColor(Color.WHITE);
+        p.setShadowLayer(s * 0.03f, 0, s * 0.02f, 0x4D0A3A80);
+        // vent
+        c.drawRoundRect(new RectF(s * 0.18f, s * 0.20f, s * 0.82f, s * 0.36f), s * 0.05f, s * 0.05f, p);
+        p.clearShadowLayer();
+        p.setColor(0xFF4A90E2);
+        p.setStrokeWidth(s * 0.02f);
+        for (int i = 1; i < 6; i++) {
+            float x = s * (0.18f + 0.64f * i / 6f);
+            c.drawLine(x, s * 0.24f, x - s * 0.02f, s * 0.32f, p);
+        }
+        // air
+        p.setColor(Color.WHITE);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStrokeWidth(s * 0.045f);
+        for (int i = 0; i < 3; i++) {
+            float x = s * (0.32f + 0.18f * i), sway = (i - 1) * s * 0.06f;
+            android.graphics.Path a = new android.graphics.Path();
+            a.moveTo(x, s * 0.46f);
+            a.cubicTo(x + s * 0.07f + sway, s * 0.56f, x - s * 0.07f + sway, s * 0.66f, x + sway * 1.6f, s * 0.80f);
+            p.setAlpha(i == 1 ? 255 : 210);
+            c.drawPath(a, p);
         }
         return bmp;
     }
