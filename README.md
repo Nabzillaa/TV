@@ -146,7 +146,7 @@ press, so several presses of + are one command. Open it with `--es show aircon`.
 - Timers (on the card, under the set temperature): the Airbase's own quick timer, so they run with the TV off.
   `get_quick_timer` / `set_quick_timer?t1_ena=&t1_pow=&t1_time=&t2_ena=&t2_pow=&t2_time=`: two slots, `_pow` 1 turns
   the aircon on and 0 off (the Daikin app keeps t1 = on, t2 = off), `_time` in minutes after midnight (1095 = 6:15 pm).
-  Each has a switch and - / + in 15-minute steps; holding OK on - / + jumps by the hour.
+  Each has a switch, - / + in 15-minute steps (holding OK jumps by the hour) and ✕ to remove a set timer.
 - Setup: `adb shell am start -n com.nabil.tvhome/.HomeActivity --es aircon 192.168.1.189` (or `--es aircon clear`).
   It checks the address is a Daikin and keeps its MAC; if the address changes, the TV searches the LAN for that MAC.
 - It answers 403 to any request whose `Host` header isn't its own address (HttpURLConnection sends the right one;

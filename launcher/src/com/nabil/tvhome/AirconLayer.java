@@ -27,8 +27,8 @@ import java.util.concurrent.Executors;
  * speed, with the inside and outside temperatures; on the right a card with the set temperature (- / +), the mode, the
  * fan speed, zones when the system has them, and On / Off. Changes show at once and are sent after a short pause, so
  * several presses of + go out as one command; readings that arrive meanwhile don't undo them. Under the temperature,
- * the Airbase's own on and off timers (they run on the Airbase, TV off or not): a switch each and - / + in 15-minute
- * steps (held: an hour at a time).
+ * the Airbase's own on and off timers (they run on the Airbase, TV off or not): a switch each, - / + in 15-minute
+ * steps (held: an hour at a time) and ✕ to remove a set one.
  */
 class AirconLayer extends FrameLayout {
     private static final int GREY = 0x99FFFFFF, BLUE = 0xFF64D2FF, ORANGE = 0xFFFF9F0A, TEAL = 0xFF5EE6C8, WHITE = 0xFFE5E5EA;
@@ -50,7 +50,7 @@ class AirconLayer extends FrameLayout {
     private Airbase.Status st;                                // what the screen shows (and what gets sent)
     private long openedAt, touchedAt, timersTouchedAt;
     private Airbase.Timer[] timers;                           // what the timer box shows (and what gets sent)
-    private final TextView[] timerSwitch = new TextView[2], timerTime = new TextView[2], timerMinus = new TextView[2], timerPlus = new TextView[2];
+    private final TextView[] timerSwitch = new TextView[2], timerTime = new TextView[2], timerMinus = new TextView[2], timerPlus = new TextView[2], timerClear = new TextView[2];
     private final LinearLayout timerBox;
     private boolean sending;
 
@@ -145,12 +145,20 @@ class AirconLayer extends FrameLayout {
             stepper(timerMinus[i], k, -1);
             stepper(timerPlus[i], k, 1);
             timerTime[i] = text(c, 17, Color.WHITE, Typeface.NORMAL);
-            r.addView(timerSwitch[i], new LinearLayout.LayoutParams(dp(86), dp(34)));
+            r.addView(timerSwitch[i], new LinearLayout.LayoutParams(dp(80), dp(34)));
             LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(dp(34), dp(34));
-            mp.setMarginStart(dp(8));
+            mp.setMarginStart(dp(6));
             r.addView(timerMinus[i], mp);
             r.addView(timerTime[i], new LinearLayout.LayoutParams(0, -2, 1f));
             r.addView(timerPlus[i], new LinearLayout.LayoutParams(dp(34), dp(34)));
+            timerClear[i] = button(c, "\u2715", 15);                // remove this timer
+            timerClear[i].setOnClickListener(v -> {
+                timerSwitch[k].requestFocus();                    // the ✕ hides once the timer is gone
+                timerChange(() -> timers[k].enabled = false);
+            });
+            LinearLayout.LayoutParams xp = new LinearLayout.LayoutParams(dp(34), dp(34));
+            xp.setMarginStart(dp(6));
+            r.addView(timerClear[i], xp);
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
             if (i > 0) rp.topMargin = dp(6);
             timerBox.addView(r, rp);
@@ -418,6 +426,7 @@ class AirconLayer extends FrameLayout {
             style(timerSwitch[i]);
             timerTime[i].setText(t.enabled ? clock(t.minutes) : "Not set");
             timerTime[i].setAlpha(t.enabled ? 1f : 0.5f);
+            timerClear[i].setVisibility(t.enabled ? VISIBLE : INVISIBLE);
         }
     }
 
