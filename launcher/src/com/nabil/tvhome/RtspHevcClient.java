@@ -48,22 +48,25 @@ class RtspHevcClient {
     private String realm, nonce, session;
 
     // decoder state
-    private MediaCodec codec;
+    private volatile MediaCodec codec;   // read by the render thread
     private volatile Surface surface;
     /** Decode in software (for small streams) so the TV's few hardware decoders stay free for bigger pictures. */
     volatile boolean preferSoftware;
     private Surface codecSurface;
     private final Object lock = new Object();
     private final ArrayList<byte[]> gop = new ArrayList<>();
+    private final ArrayList<Long> gopPts = new ArrayList<>();
     private int gopBytes;
     private boolean gopValid, auHasKey;
     private byte[] vps, sps, pps;
-    private boolean sawKey, firstFrame;
+    private boolean sawKey;
+    private volatile boolean firstFrame;
     private final ByteArrayOutputStream au = new ByteArrayOutputStream(1 << 16);
-    private long auTs = -1;
+    private long auTs = -1, auPtsUs;
     private ByteArrayOutputStream fu;
-    private final MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
     private int videoW, videoH;
+    /** Frames before this one (a replayed GOP) are decoded but not shown, so a new decoder starts on the newest picture. */
+    private volatile long showFromUs;
     private long t0;
     private void mark(String what) { Log.d("RtspTime", "ch" + channel + "/" + subtype + " +" + (System.currentTimeMillis() - t0) + "ms " + what); }
 
@@ -121,8 +124,8 @@ class RtspHevcClient {
 
     /** Stop rendering and free the hardware decoder; the network stream and GOP buffer stay alive. */
     void detach() {
+        surface = null;                     // lets a feed waiting for an input buffer give up before we take the lock
         synchronized (lock) {
-            surface = null;
             releaseCodec();
             firstFrame = false;
         }
@@ -342,6 +345,7 @@ class RtspHevcClient {
         mediaMs = mediaTicks / 90;
 
         if (auTs != -1 && ts != auTs) flushAu(); // new frame began without a marker on the last packet
+        if (auTs == -1) auPtsUs = mediaTicks * 1000 / 90;
         auTs = ts;
 
         int type = (d[off] >> 1) & 0x3f;
@@ -398,23 +402,27 @@ class RtspHevcClient {
         au.reset();
         boolean key = auHasKey;
         auHasKey = false;
+        long pts = auPtsUs;
         synchronized (lock) {
             // keep the latest GOP (from the last keyframe) so a decoder can start instantly on attach
-            if (key) { gop.clear(); gopBytes = 0; gopValid = true; }
+            if (key) { gop.clear(); gopPts.clear(); gopBytes = 0; gopValid = true; }
             if (gopValid) {
                 gop.add(data);
+                gopPts.add(pts);
                 gopBytes += data.length;
-                if (gopBytes > 8 << 20) { gop.clear(); gopBytes = 0; gopValid = false; }
+                if (gopBytes > 8 << 20) { gop.clear(); gopPts.clear(); gopBytes = 0; gopValid = false; }
             }
             Surface s = surface;
             if (s == null) return;
             try {
                 if (codec != null && codecSurface != s) { releaseCodec(); firstFrame = false; } // moved to another surface
                 if (codec == null) {
-                    if (!gopValid || !createCodec(s)) return;
-                    for (byte[] f : gop) feed(f);
+                    if (!gopValid) return;
+                    showFromUs = pts;
+                    if (!createCodec(s)) return;
+                    for (int i = 0; i < gop.size(); i++) feed(gop.get(i), gopPts.get(i), s);
                 } else {
-                    feed(data);
+                    feed(data, pts, s);
                 }
             } catch (Exception e) {
                 Log.w(TAG, "decode error ch" + channel + ": " + e);
@@ -423,19 +431,25 @@ class RtspHevcClient {
         }
     }
 
-    private void feed(byte[] data) {
-        int idx = codec.dequeueInputBuffer(15_000);
-        if (idx >= 0) {
-            ByteBuffer b = codec.getInputBuffer(idx);
-            if (b != null && data.length <= b.capacity()) {
-                b.clear();
-                b.put(data);
-                codec.queueInputBuffer(idx, 0, data.length, System.nanoTime() / 1000, 0);
-            } else {
-                codec.queueInputBuffer(idx, 0, 0, 0, 0);
-            }
+    /**
+     * Queues one access unit, waiting while the decoder is full (the render thread holds frames until they are due,
+     * so this is the jitter buffer pushing back). Dropping a frame here would smear the picture until the next keyframe.
+     */
+    private void feed(byte[] data, long ptsUs, Surface s) {
+        int idx = -1;
+        for (int i = 0; i < 100 && idx < 0 && surface == s && running; i++) idx = codec.dequeueInputBuffer(10_000);
+        if (idx < 0) {
+            if (surface == s && running) Log.w(TAG, "ch" + channel + "/" + subtype + " decoder full, frame dropped");
+            return;
         }
-        drain();
+        ByteBuffer b = codec.getInputBuffer(idx);
+        if (b != null && data.length <= b.capacity()) {
+            b.clear();
+            b.put(data);
+            codec.queueInputBuffer(idx, 0, data.length, ptsUs, 0);
+        } else {
+            codec.queueInputBuffer(idx, 0, 0, ptsUs, 0);
+        }
     }
 
     private boolean createCodec(Surface target) throws IOException {
@@ -456,24 +470,76 @@ class RtspHevcClient {
         Log.d(TAG, "ch" + channel + "/" + subtype + " decoder " + codec.getName() + " " + videoW + "x" + videoH);
         mark("decoder-ready");
         listener.onVideoSize(videoW, videoH);
+        final MediaCodec c = codec;
+        Thread r = new Thread(() -> render(c), "render-" + channel + "-" + subtype);
+        r.setPriority(Thread.MAX_PRIORITY);
+        r.start();
         return true;
     }
 
-    private void drain() {
-        for (int guard = 0; guard < 8; guard++) {
-            int o = codec.dequeueOutputBuffer(info, 0);
-            if (o >= 0) {
-                codec.releaseOutputBuffer(o, true);
+    // ------------------------------------------------------------------ paced rendering
+
+    private static final long MARGIN_NS = 80_000_000L;    // jitter cushion: frames are shown this long after arrival
+    private static final long RESYNC_NS = 2_000_000_000L; // a frame due this far off means the clock restarted
+
+    /**
+     * Shows each decoded frame at its RTP time instead of the moment it is decoded. The NVR's frames arrive over TCP in
+     * bursts (a big keyframe holds up the frames behind it), and a TextureView ignores render timestamps, so showing
+     * them on arrival made the picture stall and then fast-forward. A frame that turns up late pushes the clock back;
+     * when there is more cushion than needed the clock creeps forward again, at most 1/16 faster than real time.
+     */
+    private void render(MediaCodec c) {
+        MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
+        long offsetNs = 0, lastPts = -1, statT = System.nanoTime(), maxLate = 0;
+        int shown = 0, late = 0;
+        boolean clock = false;
+        try {
+            while (codec == c) {
+                int o = c.dequeueOutputBuffer(bi, 20_000);
+                if (o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    MediaFormat nf = c.getOutputFormat();
+                    int w = nf.getInteger(MediaFormat.KEY_WIDTH), h = nf.getInteger(MediaFormat.KEY_HEIGHT);
+                    if (nf.containsKey("crop-right") && nf.containsKey("crop-left")) w = nf.getInteger("crop-right") - nf.getInteger("crop-left") + 1;
+                    if (nf.containsKey("crop-bottom") && nf.containsKey("crop-top")) h = nf.getInteger("crop-bottom") - nf.getInteger("crop-top") + 1;
+                    if (w != videoW || h != videoH) { videoW = w; videoH = h; listener.onVideoSize(w, h); }
+                }
+                if (o < 0) continue;
+                long pts = bi.presentationTimeUs;
+                if (pts < showFromUs) { c.releaseOutputBuffer(o, false); continue; }   // catching up through the GOP
+                long now = System.nanoTime(), ptsNs = pts * 1000;
+                if (!clock) { offsetNs = now - ptsNs + MARGIN_NS; clock = true; }
+                long due = ptsNs + offsetNs, slack = due - now;
+                if (slack < 0) {
+                    late++;
+                    maxLate = Math.max(maxLate, -slack);
+                    offsetNs -= slack;                 // late: wait longer from now on rather than rushing to catch up
+                    due = now;
+                } else if (slack > MARGIN_NS + RESYNC_NS) {
+                    offsetNs = now - ptsNs + MARGIN_NS;
+                    due = now + MARGIN_NS;
+                } else if (slack > MARGIN_NS && lastPts >= 0 && pts > lastPts) {
+                    long step = Math.min((slack - MARGIN_NS) / 16, (pts - lastPts) * 1000 / 16);
+                    offsetNs -= step;
+                    due -= step;
+                }
+                lastPts = pts;
+                while (codec == c) {
+                    long wait = due - System.nanoTime();
+                    if (wait <= 0) break;
+                    Thread.sleep(Math.min(wait / 1_000_000, 50), (int) (Math.min(wait, 50_000_000L) % 1_000_000));
+                }
+                if (codec != c) break;
+                c.releaseOutputBuffer(o, true);
                 if (!firstFrame) { firstFrame = true; mark("FIRST-FRAME"); listener.onFirstFrame(); }
-            } else if (o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                MediaFormat nf = codec.getOutputFormat();
-                int w = nf.getInteger(MediaFormat.KEY_WIDTH), h = nf.getInteger(MediaFormat.KEY_HEIGHT);
-                if (nf.containsKey("crop-right") && nf.containsKey("crop-left")) w = nf.getInteger("crop-right") - nf.getInteger("crop-left") + 1;
-                if (nf.containsKey("crop-bottom") && nf.containsKey("crop-top")) h = nf.getInteger("crop-bottom") - nf.getInteger("crop-top") + 1;
-                if (w != videoW || h != videoH) { videoW = w; videoH = h; listener.onVideoSize(w, h); }
-            } else {
-                break;
+                shown++;
+                if (now - statT >= 5_000_000_000L) {
+                    Log.d(TAG, "ch" + channel + "/" + subtype + " 5s: shown=" + shown + " late=" + late + " maxLate=" + maxLate / 1_000_000
+                            + "ms delay=" + (offsetNs - (now - ptsNs)) / 1_000_000 + "ms");
+                    statT = now; shown = late = 0; maxLate = 0;
+                }
             }
+        } catch (Exception ignored) {
+            // the codec was released under us (detach/stop)
         }
     }
 

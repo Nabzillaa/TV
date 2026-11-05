@@ -279,7 +279,7 @@ class CameraLayer extends FrameLayout {
     private int streamTiles() { return Math.max(1, dbUrl != null ? tiles - 1 : tiles); }   // tiles that play here
     private boolean isNvr(int ch) { return ch >= 1 && ch <= channels; }    // NVR channels have recordings
     /** Remote keys for the full-screen picture. */
-    private String hint() { return (isNvr(current) ? "OK: playback   ·   " : "") + "◀ ▶ switch   ·   Back: grid"; }
+    private String hint() { return (isNvr(current) ? "OK: playback   ·   " : "") + "◀ ▶ switch   ·   Back: " + (direct ? "Home" : "grid"); }
     private boolean isLive(int ch) { return isBs(ch) || isEu(ch); }          // tiles that run on a non-NVR stream
     private AnnexBDecoder liveDecoder(int ch) { return isBs(ch) ? lensDec[lensOf(ch)] : isEu(ch) ? euDec[euIdx(ch)] : null; }
     private AnnexBDecoder snapDecoder(int ch) { return isBs(ch) ? lensSnap[lensOf(ch)] : isEu(ch) ? euSnap[euIdx(ch)] : null; }
@@ -428,6 +428,7 @@ class CameraLayer extends FrameLayout {
 
     void open() {
         if (!configured()) return;
+        direct = false;
         if (snap == null) reload();
         ui.removeCallbacks(warmStop);
         ui.removeCallbacks(baseusStop);
@@ -444,10 +445,23 @@ class CameraLayer extends FrameLayout {
         for (int ch = 1; ch <= tiles; ch++) startTile(ch);
     }
 
-    /** Back: full screen -> grid -> closed. */
+    /** Opened straight onto one camera (from the Home hub): Back from its full screen closes rather than showing the grid. */
+    private boolean direct;
+
+    /** Open full screen on one NVR channel. */
+    void openChannel(int ch) {
+        open();
+        if (!isOpen() || !isNvr(ch)) return;
+        direct = true;
+        enterFull(ch);
+    }
+
+    /** Back: full screen -> grid -> closed (full screen -> closed when opened on one camera). */
     void back() {
         if (fullMode && playback.back()) return;
-        if (fullMode) {
+        if (fullMode && direct) {
+            close();
+        } else if (fullMode) {
             leaveFull();
         } else {
             close();

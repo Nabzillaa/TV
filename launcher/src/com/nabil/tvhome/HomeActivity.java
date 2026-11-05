@@ -6,7 +6,6 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
@@ -24,16 +23,12 @@ import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.StatFs;
 import android.os.SystemClock;
-import android.text.SpannableStringBuilder;
-import android.text.Spanned;
-import android.text.style.ForegroundColorSpan;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -124,14 +119,12 @@ public class HomeActivity extends Activity {
     private CameraLayer cameras;
     private GarageDoor garage;
     private GarageLayer garageLayer;
-    private View garageDockItem;
     private SolisCloud solis;
     private SolarLayer solarLayer;
-    private View solarDockItem;
     private Airbase aircon;
     private AirconLayer airconLayer;
-    private View airconDockItem;
-    private View cameraDockItem;
+    private HubLayer hub;
+    private View hubDockItem;
     private TextView wxIcon, wxTemp, wxDetail;
     private static final long WX_REFRESH_MS = 30 * 60_000L;
     private boolean ambient;
@@ -214,6 +207,9 @@ public class HomeActivity extends Activity {
         aircon = new Airbase(prefs);
         airconLayer = new AirconLayer(this, ui, aircon);
         root.addView(airconLayer, new FrameLayout.LayoutParams(-1, -1));
+        hub = new HubLayer(this, ui, prefs, cameras, garage, garageLayer, solis, solarLayer, aircon, airconLayer,
+                cameraGlyph(), garageGlyph(), solarGlyph(), airconGlyph());
+        root.addView(hub, root.indexOfChild(cameras), new FrameLayout.LayoutParams(-1, -1));   // the screens open over it
 
         matrix = new MatrixView(this);
         matrix.setVisibility(View.GONE);
@@ -250,10 +246,10 @@ public class HomeActivity extends Activity {
         AmberClient.handle(prefs, i);
         Airbase.handle(prefs, i, () -> ui.post(() -> { if (airconLayer != null) rebuildDock(); }));
         if (eufyHideChange) { cameras.reload(); rebuildDock(); }
-        String show = i == null ? null : i.getStringExtra("show");      // --es show cameras|doorbell|garage|solar|aircon
+        String show = i == null ? null : i.getStringExtra("show");      // --es show home|cameras|doorbell|garage|solar|aircon
         if (show != null) {
             i.removeExtra("show");
-            ui.post(() -> { if (show.equals("doorbell")) cameras.showDoorbell(); else if (show.equals("garage")) garageLayer.open(); else if (show.equals("solar")) solarLayer.open(); else if (show.equals("aircon")) airconLayer.open(); else cameras.open(); });
+            ui.post(() -> { if (show.equals("doorbell")) cameras.showDoorbell(); else if (show.equals("garage")) garageLayer.open(); else if (show.equals("solar")) solarLayer.open(); else if (show.equals("aircon")) airconLayer.open(); else if (show.equals("home")) hub.open(); else cameras.open(); });
         }
         String db = i == null ? null : i.getStringExtra("doorbell");     // --es doorbell "Name|https://home.google.com/..." (or clear)
         if (db != null) {
@@ -598,6 +594,7 @@ public class HomeActivity extends Activity {
         ui.removeCallbacksAndMessages(null);
         matrix.stop();
         cameras.shutdown();
+        hub.close();
         wallA.animate().cancel();
         wallB.animate().cancel();
     }
@@ -622,6 +619,7 @@ public class HomeActivity extends Activity {
         garageLayer.close();
         solarLayer.close();
         airconLayer.close();
+        hub.close();
         if (matrix.getVisibility() == View.VISIBLE) matrix.stop();
         exitAmbient();
     }
@@ -629,24 +627,25 @@ public class HomeActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (matrix.getVisibility() == View.VISIBLE) matrix.stop();
-        else if (garageLayer.isOpen()) {
-            garageLayer.close();
-            if (garageDockItem != null) garageDockItem.requestFocus();
-        }
-        else if (solarLayer.isOpen()) {
-            solarLayer.close();
-            if (solarDockItem != null) solarDockItem.requestFocus();
-        }
-        else if (airconLayer.isOpen()) {
-            airconLayer.close();
-            if (airconDockItem != null) airconDockItem.requestFocus();
-        }
+        else if (garageLayer.isOpen()) { garageLayer.close(); backToHub(); }
+        else if (solarLayer.isOpen()) { solarLayer.close(); backToHub(); }
+        else if (airconLayer.isOpen()) { airconLayer.close(); backToHub(); }
         else if (cameras.isOpen()) {
             cameras.back();
-            if (!cameras.isOpen() && cameraDockItem != null) cameraDockItem.requestFocus(); // back on the Cameras icon
+            if (!cameras.isOpen()) backToHub();
+        }
+        else if (hub.isOpen()) {
+            hub.close();
+            if (hubDockItem != null) hubDockItem.requestFocus();                    // back on the Home icon
         }
         else if (allAppsLayer.getVisibility() == View.VISIBLE) showAllApps(false);
         // on the home screen Back does nothing
+    }
+
+    /** A screen closed: back on its card in the hub, or on the Home icon when it was opened straight from an intent. */
+    private void backToHub() {
+        if (hub.isOpen()) hub.childClosed();
+        else if (hubDockItem != null) hubDockItem.requestFocus();
     }
 
     @Override
@@ -662,7 +661,7 @@ public class HomeActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent e) {
-        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && !cameras.isOpen() && !garageLayer.isOpen() && !solarLayer.isOpen() && !airconLayer.isOpen();
+        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && !cameras.isOpen() && !garageLayer.isOpen() && !solarLayer.isOpen() && !airconLayer.isOpen() && !hub.isOpen();
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             if (!base && allAppsLayer.getVisibility() == View.VISIBLE) {
                 int pos = grid.getSelectedItemPosition();
@@ -725,7 +724,7 @@ public class HomeActivity extends Activity {
     }
 
     private void enterAmbient() {
-        if (allAppsLayer.getVisibility() == View.VISIBLE || cameras.isOpen() || garageLayer.isOpen() || solarLayer.isOpen() || airconLayer.isOpen()) {
+        if (allAppsLayer.getVisibility() == View.VISIBLE || cameras.isOpen() || garageLayer.isOpen() || solarLayer.isOpen() || airconLayer.isOpen() || hub.isOpen()) {
             ui.postDelayed(idleRunnable, IDLE_MS);
             return;
         }
@@ -831,22 +830,10 @@ public class HomeActivity extends Activity {
             if (a == null) continue;
             dock.addView(dockItem(icon(a), a.label, () -> launch(a)));
         }
-        cameraDockItem = null;
-        if (cameras != null && cameras.configured())
-            dock.addView(cameraDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), cameraGlyph()),
-                    "Cameras", () -> cameras.open(), () -> ui.postDelayed(() -> { if (dock.findFocus() != null && cameras != null) cameras.prewarm(); }, 250)));
-        garageDockItem = null;
-        if (garage != null && garage.configured())
-            dock.addView(garageDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), garageGlyph()),
-                    "Garage", () -> garageLayer.open()));
-        solarDockItem = null;
-        if (solis != null && solis.configured())
-            dock.addView(solarDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), solarGlyph()),
-                    "Solar", () -> solarLayer.open()));
-        airconDockItem = null;
-        if (aircon != null && aircon.configured())
-            dock.addView(airconDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), airconGlyph()),
-                    "Aircon", () -> airconLayer.open()));
+        hubDockItem = null;
+        if (hub != null && hub.configured())
+            dock.addView(hubDockItem = dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), homeGlyph()),
+                    "Home", () -> hub.open(), () -> ui.postDelayed(() -> { if (dock.findFocus() != null && cameras != null) cameras.prewarm(); }, 250)));
         dock.addView(dockItem(new android.graphics.drawable.BitmapDrawable(getResources(), gridGlyph()),
                 "All apps", () -> showAllApps(true)));
         AppEntry s = apps.get(SETTINGS_PKG);
@@ -1086,6 +1073,41 @@ public class HomeActivity extends Activity {
             else { long len = f.length(); if (f.delete()) freed += len; }
         }
         return freed;
+    }
+
+    /** Violet-to-indigo tile with a white house, a lit window and a soft glow behind it: the Home hub. */
+    private Bitmap homeGlyph() {
+        int s = dp(64) * 2;
+        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setShader(new android.graphics.LinearGradient(0, 0, s, s, 0xFFBF5AF2, 0xFF3A3AD6, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(new android.graphics.RadialGradient(s * 0.5f, s * 0.55f, s * 0.45f, 0x40FFFFFF, 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, s, s, p);
+        p.setShader(null);
+        android.graphics.Path house = new android.graphics.Path();
+        house.moveTo(s * 0.50f, s * 0.20f);
+        house.lineTo(s * 0.83f, s * 0.47f);
+        house.lineTo(s * 0.74f, s * 0.47f);
+        house.lineTo(s * 0.74f, s * 0.80f);
+        house.lineTo(s * 0.26f, s * 0.80f);
+        house.lineTo(s * 0.26f, s * 0.47f);
+        house.lineTo(s * 0.17f, s * 0.47f);
+        house.close();
+        p.setColor(Color.WHITE);
+        p.setStyle(Paint.Style.FILL_AND_STROKE);
+        p.setStrokeJoin(Paint.Join.ROUND);
+        p.setStrokeWidth(s * 0.04f);
+        p.setShadowLayer(s * 0.04f, 0, s * 0.025f, 0x592A0A6E);
+        c.drawPath(house, p);
+        p.clearShadowLayer();
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xFF4B3FD8);
+        c.drawRoundRect(new RectF(s * 0.44f, s * 0.60f, s * 0.56f, s * 0.80f), s * 0.03f, s * 0.03f, p);   // door
+        p.setColor(0xFFFFD60A);
+        c.drawRoundRect(new RectF(s * 0.33f, s * 0.52f, s * 0.41f, s * 0.60f), s * 0.015f, s * 0.015f, p); // lit window
+        return bmp;
     }
 
     /** Warm orange tile with a white house front and a ribbed garage door. */

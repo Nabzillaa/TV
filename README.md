@@ -27,9 +27,28 @@ talks to that server.
 - Live HUD (CPU clock graph, RAM, IP/Wi-Fi, disk, uptime, Clean up button); time-of-day greeting
 - Small Settings gear in the top-right corner: Up from the right half of the dock (Right from Clean up) selects it
 - Weather card (Open-Meteo; location from an IP lookup, cached for a day; refreshed every 30 min)
-- **Cameras** dock tile (see below); Garage, Solar and Aircon dock buttons
+- **Home** dock tile: one hub for Cameras, Garage, Solar and Aircon (see below)
 - Konami code (Up Up Down Down Left Right Left Right): Matrix rain
 - 90 s idle: ambient mode (dock and HUD fade out, photo caption appears)
+
+## Home hub (`HubLayer`)
+One dock tile instead of four. It opens a 2x2 grid of live cards with the everyday controls on them, under the time, a
+greeting and a summary line (garage, aircon, solar, battery). The card holding the focus lights up in its colour.
+- **Cameras**: the first four NVR channels as JPEG snapshots (the selected one refreshes about every 0.75 s, the rest
+  take turns). Each picture is selectable: OK opens that camera full screen, Back comes straight back to the hub. The
+  live streams are pre-connected while the hub is open, so they start instantly.
+- **Solar**: power now, home use, buying/selling, a battery bar, and an animated flow between sun, house, battery and
+  grid (dots run the way power flows, faster for more). OK opens the Solar screen. Read every minute.
+- **Garage**: the door's camera live (channel `gd_cam`, sub-stream decoded in software so the hardware decoders stay
+  free; it stops while a full screen is open). **Open/Close needs a second OK within 3 s** (the button
+  turns orange and says Confirm), so a stray press can't move the door. Camera › opens the Garage screen, which has
+  Stop. Read every 5 s (1.5 s while moving).
+- **Aircon**: - / + set point, Power and Mode (Cool, Heat, Dry, Fan, and Auto when the model has it; picking a mode turns
+  it on). Changes show at once and are sent 0.9 s after the last press; readings are ignored for 8 s after a change.
+  More › opens the Aircon screen. Read every 30 s.
+- A pill at the bottom confirms each action. Polling pauses while one of the full screens is open; only set-up devices
+  get a card, and the tile is hidden when none are.
+- Open it directly: `adb shell am start -n com.nabil.tvhome/.HomeActivity --es show home`.
 
 ## Cameras (Dahua-family NVR)
 Configure once (the launcher stores the login privately on the TV; it is not in this repo):
@@ -43,7 +62,12 @@ Use a view-only NVR account, not admin.
   after about a second); Left/Right switches camera; Back goes full screen > grid > home.
 - Video is H.265 over RTSP (TCP interleaved), parsed by `RtspHevcClient` and decoded by the TV's hardware decoder
   into a `TextureView`. The NVR's digest nonce is bound to the connection, so auth is recomputed per request.
-- Hovering the Cameras icon pre-connects the streams; each keeps its latest keyframe so the picture is instant.
+- Frames are shown on their RTP clock by a render thread, not as they come out of the decoder: the NVR's video
+  arrives over TCP in bursts and a `TextureView` ignores render timestamps, so showing frames on arrival made the
+  picture stall and then fast-forward. A late frame adds delay; spare delay is caught up at most 1/16 faster than
+  real time. A new decoder decodes the buffered GOP without showing it, so it starts on the newest picture.
+  Logcat tag `RtspHevc` prints `5s: shown=… late=… maxLate=…` while a stream is on screen.
+- Hovering the Home icon (or opening the hub) pre-connects the streams; each keeps its latest keyframe so the picture is instant.
   Streams stay warm for 3 minutes after you close the screen and are dropped when you leave the launcher.
 - A stream that fails falls back to JPEG snapshots (`NvrClient`), retrying live video every 30 s. Two rejected
   logins in a row pause all login attempts for 5 minutes so a wrong password cannot lock the NVR.
@@ -123,18 +147,18 @@ Android's WebView can't be used: Google refuses account sign-in from it.
   (`--es doorbell clear` removes the tile). Open directly: `--es show doorbell` (or `--es show cameras`).
 - Don't re-enable `com.google.android.apps.tv.launcherx`: it outranks the custom home screen.
 
-## Garage door (Meross MSG100/MSG200, dock button)
+## Garage door (Meross MSG100/MSG200, Home hub)
 Controlled directly on the LAN through the opener's local HTTP API (`GarageDoor`): POST `http://<ip>/config` with
 a JSON message signed `md5(messageId + key + timestamp)`; no Meross cloud at run time. The panel (`GarageLayer`) shows
 the NVR camera that watches the door live (channel 1, pref `gd_cam`; main stream, sub-stream fallback) beside a card
 with an illustrated door that moves with the real one, its state (polled) and one Open/Close button plus Close; OK
-presses in the first 0.7 s are ignored so a double press on the dock icon can't move the door. Open it directly with
+presses in the first 0.7 s are ignored so a double press on its hub card can't move the door. Open it directly with
 `adb shell am start -n com.nabil.tvhome/.HomeActivity --es show garage`. If the opener's address changes, the TV searches the LAN for its uuid.
 - Setup: `./meross-setup.sh` signs in to Meross once on the Mac (password hidden, never stored or sent to the TV) to
   get the account key, finds the opener by MAC, checks the key locally, and sends the TV ip/key/uuid/channel/name.
   `./meross-setup.sh test` reads the door state through the TV; `clear` removes it.
 
-## Aircon (Daikin Airbase BRP15B61, ducted, dock button)
+## Aircon (Daikin Airbase BRP15B61, ducted, Home hub)
 Controlled directly on the LAN through the Airbase's local HTTP API (`Airbase`): GET
 `http://<ip>/skyfi/aircon/get_control_info`, `get_sensor_info`, `get_model_info`, `get_zone_setting` and
 `set_control_info?lpw=&pow=&mode=&stemp=&shum=&f_rate=&f_auto=&f_dir=&f_airside=`; answers are `key=value,...` text.
@@ -155,7 +179,7 @@ press, so several presses of + are one command. Open it with `--es show aircon`.
   with a pause, and never treats a 403 as "moved" (no LAN search). `common/basic_info` carries the Daikin app's
   login in plain text: it is never logged or stored.
 
-## Solar (Solis inverter + battery, dock button)
+## Solar (Solis inverter + battery, Home hub)
 The Solis S3 WiFi stick (192.168.1.109) only talks to SolisCloud (no local ports), so the screen uses the free
 SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Management) for a KeyID and KeySecret, then
 
