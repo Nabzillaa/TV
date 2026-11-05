@@ -70,7 +70,7 @@ import java.util.concurrent.Executors;
 
 /**
  * Minimal Apple TV-style home with nerd extras: Ken Burns wallpapers with parallax, a magnifying
- * dock, a live system HUD, a neofetch panel (Up / Menu), ambient mode and a Konami-code Matrix rain.
+ * dock, a live system HUD, ambient mode and a Konami-code Matrix rain.
  */
 public class HomeActivity extends Activity {
     private static final String[] DEFAULT_DOCK = {
@@ -116,7 +116,7 @@ public class HomeActivity extends Activity {
     private ImageView settingsButton;
     private View lastDockFocus;
     private TextView greeting;
-    private FrameLayout allAppsLayer, neofetchLayer;
+    private FrameLayout allAppsLayer;
     private GridView grid;
     private AppsAdapter adapter;
     private MatrixView matrix;
@@ -202,7 +202,6 @@ public class HomeActivity extends Activity {
 
         buildDock(root);
         buildAllAppsLayer(root);
-        buildNeofetch(root);
         cameras = new CameraLayer(this, ui, prefs);
         cameras.reload();
         root.addView(cameras, new FrameLayout.LayoutParams(-1, -1));
@@ -572,97 +571,6 @@ public class HomeActivity extends Activity {
         root.addView(allAppsLayer, new FrameLayout.LayoutParams(-1, -1));
     }
 
-    private static final String[] ANDROID_ART = {
-        "    ;,           ,;   ",
-        "     ';,.-----.,;'    ",
-        "    ,'           ',   ",
-        "   /    O     O    \\  ",
-        "  |                 | ",
-        "  '-----------------' ",
-        "   ,-----------------.",
-        "  /|                 |",
-        " / |                 |",
-        "   |                 |",
-        "   |                 |",
-        "   '-----------------'",
-    };
-
-    private void buildNeofetch(FrameLayout root) {
-        neofetchLayer = new FrameLayout(this);
-        neofetchLayer.setBackgroundColor(0xEE06100A);
-        neofetchLayer.setVisibility(View.GONE);
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setTag("row");
-        FrameLayout.LayoutParams rp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER);
-        neofetchLayer.addView(row, rp);
-        root.addView(neofetchLayer, new FrameLayout.LayoutParams(-1, -1));
-    }
-
-    private void fillNeofetch() {
-        LinearLayout row = (LinearLayout) neofetchLayer.findViewWithTag("row");
-        row.removeAllViews();
-        StringBuilder art = new StringBuilder();
-        for (String l : ANDROID_ART) art.append(l).append('\n');
-        TextView a = mono(art.toString(), GREEN, 17);
-        a.setSingleLine(false);
-        a.setLineSpacing(0, 1.05f);
-        row.addView(a);
-
-        ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
-        ((ActivityManager) getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(mi);
-        StatFs fs = new StatFs(Environment.getDataDirectory().getPath());
-        long total = fs.getTotalBytes(), free = fs.getAvailableBytes();
-        int frozen = 0, installed = 0;
-        for (ApplicationInfo ai : getPackageManager().getInstalledApplications(PackageManager.MATCH_DISABLED_COMPONENTS)) {
-            installed++;
-            if (!ai.enabled) frozen++;
-        }
-        SpannableStringBuilder sb = new SpannableStringBuilder();
-        line(sb, "", "nabil", "@", "chiq");
-        sb.append("-------------\n");
-        line(sb, "OS", "Android " + Build.VERSION.RELEASE + " (Google TV, API " + Build.VERSION.SDK_INT + ")");
-        line(sb, "Host", Build.MANUFACTURER + " " + Build.MODEL);
-        line(sb, "Kernel", System.getProperty("os.version", "?"));
-        line(sb, "Uptime", uptime());
-        line(sb, "Packages", installed + " installed, " + frozen + " frozen");
-        line(sb, "Shell", "tvhome 1.1 (Java, " + (Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : "?") + ")");
-        line(sb, "Display", getResources().getDisplayMetrics().widthPixels + "x" + getResources().getDisplayMetrics().heightPixels
-                + " @" + Math.round(getResources().getDisplayMetrics().density * 160) + "dpi");
-        line(sb, "Memory", mb(mi.totalMem - mi.availMem) + " / " + mb(mi.totalMem));
-        line(sb, "Disk", gb(total - free) + " / " + gb(total));
-        line(sb, "Network", netString());
-        line(sb, "Ads", "0 (blocked by vibes)");
-        sb.append('\n');
-        for (int c : new int[]{0xFFFF453A, ORANGE, 0xFFFFD60A, GREEN, CYAN, 0xFF0A84FF, 0xFFBF5AF2, Color.WHITE}) {
-            int s = sb.length();
-            sb.append("███");
-            sb.setSpan(new ForegroundColorSpan(c), s, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
-        TextView info = mono("", Color.WHITE, 16);
-        info.setSingleLine(false);
-        info.setText(sb);
-        info.setPadding(dp(28), 0, 0, 0);
-        row.addView(info);
-    }
-
-    private void line(SpannableStringBuilder sb, String key, String... parts) {
-        if (!key.isEmpty()) {
-            int s = sb.length();
-            sb.append(key).append(": ");
-            sb.setSpan(new ForegroundColorSpan(GREEN), s, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            sb.append(parts[0]).append('\n');
-        } else {
-            int s = sb.length();
-            sb.append(parts[0]);
-            sb.setSpan(new ForegroundColorSpan(GREEN), s, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            s = sb.length();
-            sb.append(parts[1]).append(parts[2]).append('\n');
-            sb.setSpan(new ForegroundColorSpan(Color.WHITE), s, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
-    }
-
     // ------------------------------------------------------------------ lifecycle
 
     @Override
@@ -676,7 +584,7 @@ public class HomeActivity extends Activity {
         startHud();
         startWeather();
         resetIdle();
-        if (allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE) {
+        if (allAppsLayer.getVisibility() != View.VISIBLE) {
             if (returnToClean != null) returnToClean.requestFocus();         // back from the Shizuku prompt
             else focusDock(0);
         }
@@ -710,7 +618,6 @@ public class HomeActivity extends Activity {
 
     private void closeOverlays() {
         showAllApps(false);
-        neofetchLayer.setVisibility(View.GONE);
         cameras.close();
         garageLayer.close();
         solarLayer.close();
@@ -738,7 +645,6 @@ public class HomeActivity extends Activity {
             cameras.back();
             if (!cameras.isOpen() && cameraDockItem != null) cameraDockItem.requestFocus(); // back on the Cameras icon
         }
-        else if (neofetchLayer.getVisibility() == View.VISIBLE) neofetchLayer.setVisibility(View.GONE);
         else if (allAppsLayer.getVisibility() == View.VISIBLE) showAllApps(false);
         // on the home screen Back does nothing
     }
@@ -756,18 +662,16 @@ public class HomeActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent e) {
-        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && neofetchLayer.getVisibility() != View.VISIBLE && !cameras.isOpen() && !garageLayer.isOpen() && !solarLayer.isOpen() && !airconLayer.isOpen();
+        boolean base = allAppsLayer.getVisibility() != View.VISIBLE && !cameras.isOpen() && !garageLayer.isOpen() && !solarLayer.isOpen() && !airconLayer.isOpen();
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             if (!base && allAppsLayer.getVisibility() == View.VISIBLE) {
                 int pos = grid.getSelectedItemPosition();
                 if (pos >= 0) toggleDock(adapter.getItem(pos));
-            } else if (base) {
-                showNeofetch();
             }
             return true;
         }
         if (base && cleanButton.hasFocus()) {
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) { showNeofetch(); return true; }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 if (lastDockFocus != null && lastDockFocus.getParent() == dock) lastDockFocus.requestFocus(); else focusDock(0);
                 return true;
@@ -792,18 +696,10 @@ public class HomeActivity extends Activity {
             // Up from the dock: the right half goes to Settings (top right), the left half to Clean up (top left)
             boolean right = f != null && f.getParent() == dock && settingsButton.getVisibility() == View.VISIBLE
                     && dock.getLeft() + f.getLeft() + f.getWidth() / 2 > ((View) dock.getParent()).getWidth() / 2;
-            (right ? settingsButton : cleanButton).requestFocus();   // Up again from Clean up: neofetch
+            (right ? settingsButton : cleanButton).requestFocus();
             return true;
         }
         return super.onKeyDown(keyCode, e);
-    }
-
-    private void showNeofetch() {
-        if (neofetchLayer.getVisibility() == View.VISIBLE) return;
-        fillNeofetch();
-        neofetchLayer.setAlpha(0f);
-        neofetchLayer.setVisibility(View.VISIBLE);
-        neofetchLayer.animate().alpha(1f).setDuration(180).start();
     }
 
     // ------------------------------------------------------------------ konami / matrix / ambient
@@ -813,7 +709,6 @@ public class HomeActivity extends Activity {
             konamiPos++;
             if (konamiPos == KONAMI.length) {
                 konamiPos = 0;
-                neofetchLayer.setVisibility(View.GONE);
                 matrix.start();
             }
         } else {
@@ -830,7 +725,7 @@ public class HomeActivity extends Activity {
     }
 
     private void enterAmbient() {
-        if (allAppsLayer.getVisibility() == View.VISIBLE || neofetchLayer.getVisibility() == View.VISIBLE || cameras.isOpen() || garageLayer.isOpen() || solarLayer.isOpen() || airconLayer.isOpen()) {
+        if (allAppsLayer.getVisibility() == View.VISIBLE || cameras.isOpen() || garageLayer.isOpen() || solarLayer.isOpen() || airconLayer.isOpen()) {
             ui.postDelayed(idleRunnable, IDLE_MS);
             return;
         }

@@ -28,7 +28,7 @@ talks to that server.
 - Small Settings gear in the top-right corner: Up from the right half of the dock (Right from Clean up) selects it
 - Weather card (Open-Meteo; location from an IP lookup, cached for a day; refreshed every 30 min)
 - **Cameras** dock tile (see below); Garage, Solar and Aircon dock buttons
-- Menu, or Up twice from the left half of the dock (the first Up selects Clean up): neofetch panel. Konami code (Up Up Down Down Left Right Left Right): Matrix rain
+- Konami code (Up Up Down Down Left Right Left Right): Matrix rain
 - 90 s idle: ambient mode (dock and HUD fade out, photo caption appears)
 
 ## Cameras (Dahua-family NVR)
@@ -209,7 +209,7 @@ SolisCloud API. Request access in SolisCloud (Account > Basic Settings > API Man
   (solar + bought = home + charging + sold) and kept in prefs `sc_sb`/`sc_sg`, as their signs vary by firmware.
 
 ## Clean up (HUD button)
-A button under the stats in the top-left HUD: Up from the dock focuses it, Down goes back, Up again opens neofetch.
+A button under the stats in the top-left HUD: Up from the dock focuses it, Down goes back.
 Frees memory and storage without losing anything. With **Shizuku** running it first force-stops every app you opened
 and takes it out of Recents (apps from the app list with a task in Recents or a process running; System UI, the
 launcher, Shizuku and the keyboard are left alone), then `am kill-all`
